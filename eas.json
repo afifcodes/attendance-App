@@ -6,16 +6,25 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_NO_DETACHED": "true"
+      }
     },
     "preview": {
       "distribution": "internal"
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_NO_DETACHED": "true"
+      },
+      "node": "16"  // You can set the node version for the build environment
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "releaseTrack": "production"
+    }
   }
 }
