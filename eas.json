@@ -1,30 +1,22 @@
 {
   "cli": {
-    "version": ">= 16.20.0",
-    "appVersionSource": "remote"
+    "version": ">= 3.12.0"
   },
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal",
-      "env": {
-        "EXPO_NO_DETACHED": "true"
-      }
+      "distribution": "internal"
     },
     "preview": {
       "distribution": "internal"
     },
     "production": {
-      "autoIncrement": true,
-      "env": {
-        "EXPO_NO_DETACHED": "true"
-      },
-      "node": "16"  // You can set the node version for the build environment
+      "autoIncrement": true
     }
   },
   "submit": {
     "production": {
-      "releaseTrack": "production"
+      "android": {}
     }
   }
 }
