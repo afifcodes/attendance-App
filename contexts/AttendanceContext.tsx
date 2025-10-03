@@ -68,13 +68,14 @@ export const [AttendanceProvider, useAttendance] = createContextHook(() => {
     }
   };
 
-  const addSubject = useCallback((name: string, color: string) => {
+  const addSubject = useCallback((name: string, color: string, targetPercentage: number = 75) => {
     const newSubject: Subject = {
       id: Date.now().toString(),
       name,
       color,
       totalClasses: 0,
       attendedClasses: 0,
+      targetPercentage,
       createdAt: new Date().toISOString(),
     };
     saveSubjects([...subjects, newSubject]);
@@ -163,21 +164,22 @@ export const [AttendanceProvider, useAttendance] = createContextHook(() => {
     }
 
     const percentage = (subject.attendedClasses / subject.totalClasses) * 100;
+    const subjectTarget = subject.targetPercentage || targetPercentage;
     
     const canMiss = Math.floor(
-      (subject.attendedClasses - (targetPercentage / 100) * subject.totalClasses) /
-      (targetPercentage / 100)
+      (subject.attendedClasses - (subjectTarget / 100) * subject.totalClasses) /
+      (subjectTarget / 100)
     );
 
     const needToAttend = Math.ceil(
-      ((targetPercentage / 100) * subject.totalClasses - subject.attendedClasses) /
-      (1 - targetPercentage / 100)
+      ((subjectTarget / 100) * subject.totalClasses - subject.attendedClasses) /
+      (1 - subjectTarget / 100)
     );
 
     let status: 'safe' | 'warning' | 'danger';
-    if (percentage >= targetPercentage) {
+    if (percentage >= subjectTarget) {
       status = 'safe' as const;
-    } else if (percentage >= targetPercentage - 5) {
+    } else if (percentage >= subjectTarget - 5) {
       status = 'warning' as const;
     } else {
       status = 'danger' as const;
@@ -268,6 +270,23 @@ export const [AttendanceProvider, useAttendance] = createContextHook(() => {
     return records.filter(r => r.date === date);
   }, [records]);
 
+  const updateDayNotes = useCallback((date: string, notes: string) => {
+    const existingIndex = days.findIndex(d => d.date === date);
+    let newDays: DayRecord[];
+
+    if (existingIndex >= 0) {
+      newDays = [...days];
+      newDays[existingIndex] = {
+        ...newDays[existingIndex],
+        notes,
+      };
+    } else {
+      newDays = [...days, { date, isHoliday: false, notes }];
+    }
+
+    saveDays(newDays);
+  }, [days]);
+
   return useMemo(() => ({
     subjects,
     records,
@@ -285,5 +304,6 @@ export const [AttendanceProvider, useAttendance] = createContextHook(() => {
     updateTargetPercentage,
     isHoliday,
     getRecordsForDate,
-  }), [subjects, records, days, targetPercentage, isLoading, addSubject, updateSubject, deleteSubject, markAttendance, markAllAttendance, toggleHoliday, getSubjectStats, getOverallStats, updateTargetPercentage, isHoliday, getRecordsForDate]);
+    updateDayNotes,
+  }), [subjects, records, days, targetPercentage, isLoading, addSubject, updateSubject, deleteSubject, markAttendance, markAllAttendance, toggleHoliday, getSubjectStats, getOverallStats, updateTargetPercentage, isHoliday, getRecordsForDate, updateDayNotes]);
 });

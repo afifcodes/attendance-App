@@ -23,15 +23,17 @@ export default function SubjectsScreen() {
   const [editingSubject, setEditingSubject] = useState<string | null>(null);
   const [subjectName, setSubjectName] = useState<string>('');
   const [selectedColor, setSelectedColor] = useState<string>(SubjectColors[0]);
+  const [targetPercentage, setTargetPercentage] = useState<number>(75);
 
   const handleAddSubject = () => {
     if (subjectName.trim()) {
       if (Platform.OS !== 'web') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
-      addSubject(subjectName.trim(), selectedColor);
+      addSubject(subjectName.trim(), selectedColor, targetPercentage);
       setSubjectName('');
       setSelectedColor(SubjectColors[0]);
+      setTargetPercentage(75);
       setShowAddModal(false);
     }
   };
@@ -41,9 +43,10 @@ export default function SubjectsScreen() {
       if (Platform.OS !== 'web') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
-      updateSubject(editingSubject, { name: subjectName.trim(), color: selectedColor });
+      updateSubject(editingSubject, { name: subjectName.trim(), color: selectedColor, targetPercentage });
       setSubjectName('');
       setSelectedColor(SubjectColors[0]);
+      setTargetPercentage(75);
       setEditingSubject(null);
       setShowAddModal(false);
     }
@@ -77,16 +80,18 @@ export default function SubjectsScreen() {
     setEditingSubject(null);
     setSubjectName('');
     setSelectedColor(SubjectColors[0]);
+    setTargetPercentage(75);
     setShowAddModal(true);
     if (Platform.OS !== 'web') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
   };
 
-  const openEditModal = (id: string, name: string, color: string) => {
+  const openEditModal = (id: string, name: string, color: string, target: number = 75) => {
     setEditingSubject(id);
     setSubjectName(name);
     setSelectedColor(color);
+    setTargetPercentage(target);
     setShowAddModal(true);
     if (Platform.OS !== 'web') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -148,7 +153,7 @@ export default function SubjectsScreen() {
                     <View style={styles.subjectActions}>
                       <TouchableOpacity
                         style={styles.actionButton}
-                        onPress={() => openEditModal(subject.id, subject.name, subject.color)}
+                        onPress={() => openEditModal(subject.id, subject.name, subject.color, subject.targetPercentage)}
                       >
                         <Edit2 color={AppColors.primary} size={20} />
                       </TouchableOpacity>
@@ -252,6 +257,18 @@ export default function SubjectsScreen() {
                     />
                   ))}
                 </View>
+              </View>
+
+              <View style={styles.inputContainer}>
+                <Text style={styles.inputLabel}>Target Attendance (%)</Text>
+                <TextInput
+                  style={styles.input}
+                  value={targetPercentage.toString()}
+                  onChangeText={(text) => setTargetPercentage(parseInt(text) || 75)}
+                  placeholder="75"
+                  keyboardType="numeric"
+                  maxLength={3}
+                />
               </View>
 
               <TouchableOpacity

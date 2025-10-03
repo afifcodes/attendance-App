@@ -3,13 +3,14 @@
     "name": "Student Attendance Tracker (75% Rule)",
     "slug": "student-attendance-tracker-c5ssmfu",
     "version": "1.0.0",
+    "sdkVersion": "54.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "myapp",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/images/splash-icon.png",
+      "image": "./assets/images/spash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
