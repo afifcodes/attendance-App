@@ -1,0 +1,53 @@
+{
+  "expo": {
+    "name": "Student Attendance Tracker (75% Rule)",
+    "slug": "student-attendance-tracker-c5ssmfu",
+    "version": "1.0.0",
+    "sdkVersion": "54.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "com.appsbyafif.attendancetracker",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/images/spash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.appsbyafif.student-attendance-tracker-c5ssmfu"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.appsbyafif.attendancetracker",
+      "permissions": [
+        "android.permission.VIBRATE"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-router",
+        {
+          "origin": "https://rork.com/"
+        }
+      ]
+    ],
+  "experiments": {
+    "typedRoutes": false
+  },
+    "extra": {
+      "router": {
+        "origin": "https://rork.com/"
+      },
+      "eas": {
+        "projectId": "1d0bf8ee-dd9d-4f4c-8ce8-732639972c5b"
+      }
+    }
+  }
+}

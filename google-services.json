@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "744937657357",
+    "project_id": "attendance-app-ed147",
+    "storage_bucket": "attendance-app-ed147.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:744937657357:android:ba1677e6aa2080117d7144",
+        "oauth_client": [
+          {
+            "client_id": "744937657357-befcv60ve5pqk9n2uvt7pvr91pp13nt3.apps.googleusercontent.com",
+            "client_type": 3
+          }
+        ],
+        "android_client_info": {
+          "package_name": "com.appsbyafif.attendancetracker"
+        }
+      },
+      "api_key": [
+        {
+          "current_key": "AIzaSyBH_3Ef-QZDG-C4mmmCHYg67wRlE7WEB5g"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "744937657357-befcv60ve5pqk9n2uvt7pvr91pp13nt3.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

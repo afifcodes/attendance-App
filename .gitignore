@@ -1,0 +1,53 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
+.vercel
+
+# JetBrains/IntelliJ IDEs
+.idea/
+
+# JDK files
+jdk.zip
+jdk-21.0.4+7/
+
+# Log files
+*.log
+
+# Coverage directory (for code coverage tools)
+coverage/
+
+# Windows system files
+Thumbs.db
