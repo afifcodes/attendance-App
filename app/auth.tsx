@@ -19,6 +19,8 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { themeService, type Theme } from '@/services/theme';
 import { authService } from '@/services/auth';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { migrateLocalToCloud } from '@/services/firestore';
 import { AnimationService } from '@/services/animations';
 
 const { width } = Dimensions.get('window');
@@ -138,6 +140,74 @@ export default function AuthScreen() {
     try {
       console.log('Calling authService.signInWithGoogle()...');
       await authService.signInWithGoogle();
+      console.log('Google sign-in returned, attempting local -> cloud migration if any local data exists');
+
+      // Migrate local AsyncStorage attendance data to Firestore for this user
+      try {
+        const user = authService.getCurrentUser();
+        const uid = user?.uid;
+        if (uid) {
+          const [subjectsData, recordsData, daysData] = await Promise.all([
+            AsyncStorage.getItem('@attendance_subjects'),
+            AsyncStorage.getItem('@attendance_records'),
+            AsyncStorage.getItem('@attendance_days'),
+          ]);
+
+          if (recordsData) {
+            // Transform records array into per-date DayEntry[] shape expected by migrateLocalToCloud
+            const recordsList = JSON.parse(recordsData) as Array<any>;
+            const subjectsList = subjectsData ? JSON.parse(subjectsData) as Array<any> : [];
+
+            // Build map: date -> subjectId -> { lectures: maxIndex, attended: count }
+            const dateMap: Record<string, Record<string, { lectures: number; attended: number }>> = {};
+
+            recordsList.forEach((r: any) => {
+              const date: string = r.date;
+              const subjectId: string = r.subjectId || r.subject || 'unknown';
+              const status: string = r.status;
+              const lectureIndex: number = r.lectureIndex || 1;
+
+              dateMap[date] = dateMap[date] || {};
+              dateMap[date][subjectId] = dateMap[date][subjectId] || { lectures: 0, attended: 0 };
+              // track max lecture index
+              if (lectureIndex > dateMap[date][subjectId].lectures) {
+                dateMap[date][subjectId].lectures = lectureIndex;
+              }
+              if (status === 'present') {
+                dateMap[date][subjectId].attended += 1;
+              }
+            });
+
+            // Convert into expected shape: { date: DayEntry[] }
+            const localRecordsToMigrate: Record<string, Array<any>> = {};
+            for (const [date, subjectsMap] of Object.entries(dateMap)) {
+              localRecordsToMigrate[date] = [];
+              for (const [subjectId, counts] of Object.entries(subjectsMap)) {
+                const subject = subjectsList.find((s: any) => s.id === subjectId);
+                localRecordsToMigrate[date].push({
+                  subject: subject?.name || subjectId,
+                  subjectId,
+                  lectures: counts.lectures,
+                  attended: counts.attended,
+                });
+              }
+            }
+
+            // Only migrate if there's at least one date
+            if (Object.keys(localRecordsToMigrate).length > 0) {
+              console.log('Migrating local records to cloud for uid:', uid, 'dates:', Object.keys(localRecordsToMigrate).length);
+              await migrateLocalToCloud(uid, localRecordsToMigrate);
+              console.log('Migration finished');
+            } else {
+              console.log('No local attendance records found to migrate');
+            }
+          } else {
+            console.log('No local records present; skipping migration');
+          }
+        }
+      } catch (migrationError) {
+        console.error('Local -> cloud migration failed:', migrationError);
+      }
       console.log('Google sign-in successful!');
 
       console.log('Navigating to tabs...');
