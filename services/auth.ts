@@ -5,12 +5,13 @@ import {
   signOut as firebaseSignOut,
   onAuthStateChanged as firebaseOnAuthStateChanged,
   signInWithCredential,
+  signInWithPopup,
   GoogleAuthProvider,
   User,
   updateProfile
 } from 'firebase/auth';
 import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
-import { auth } from './firebase';
+import { auth, googleProvider } from './firebase';
 
 export interface AuthUser {
   uid: string;
@@ -61,10 +62,16 @@ class AuthService {
   // Sign in with Google
   async signInWithGoogle(): Promise<AuthUser> {
     try {
+      // If running in a browser (web), use Firebase's popup OAuth flow
+      if (typeof window !== 'undefined' && googleProvider && auth) {
+        const userCredential = await signInWithPopup(auth, googleProvider);
+        return this.mapFirebaseUser(userCredential.user);
+      }
+
       // Ensure Google Play Services are available (and prompt to update if needed)
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
 
-      // Sign in with Google
+      // Sign in with Google (native)
       const signInResult = await GoogleSignin.signIn();
       const idToken = (signInResult as any)?.idToken;
 
