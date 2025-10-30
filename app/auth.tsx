@@ -140,9 +140,9 @@ export default function AuthScreen() {
     try {
       console.log('Calling authService.signInWithGoogle()...');
       await authService.signInWithGoogle();
-      console.log('Google sign-in returned, attempting local -> cloud migration if any local data exists');
+      console.log('Google sign-in returned');
 
-      // Migrate local AsyncStorage attendance data to Firestore for this user
+      // If local data exists, ask the user whether to upload and whether to clear local copy
       try {
         const user = authService.getCurrentUser();
         const uid = user?.uid;
@@ -154,55 +154,62 @@ export default function AuthScreen() {
           ]);
 
           if (recordsData) {
-            // Transform records array into per-date DayEntry[] shape expected by migrateLocalToCloud
             const recordsList = JSON.parse(recordsData) as Array<any>;
             const subjectsList = subjectsData ? JSON.parse(subjectsData) as Array<any> : [];
 
-            // Build map: date -> subjectId -> { lectures: maxIndex, attended: count }
+            // Build dateMap
             const dateMap: Record<string, Record<string, { lectures: number; attended: number }>> = {};
-
             recordsList.forEach((r: any) => {
               const date: string = r.date;
               const subjectId: string = r.subjectId || r.subject || 'unknown';
               const status: string = r.status;
               const lectureIndex: number = r.lectureIndex || 1;
-
               dateMap[date] = dateMap[date] || {};
               dateMap[date][subjectId] = dateMap[date][subjectId] || { lectures: 0, attended: 0 };
-              // track max lecture index
-              if (lectureIndex > dateMap[date][subjectId].lectures) {
-                dateMap[date][subjectId].lectures = lectureIndex;
-              }
-              if (status === 'present') {
-                dateMap[date][subjectId].attended += 1;
-              }
+              if (lectureIndex > dateMap[date][subjectId].lectures) dateMap[date][subjectId].lectures = lectureIndex;
+              if (status === 'present') dateMap[date][subjectId].attended += 1;
             });
 
-            // Convert into expected shape: { date: DayEntry[] }
             const localRecordsToMigrate: Record<string, Array<any>> = {};
             for (const [date, subjectsMap] of Object.entries(dateMap)) {
-              localRecordsToMigrate[date] = [];
-              for (const [subjectId, counts] of Object.entries(subjectsMap)) {
-                const subject = subjectsList.find((s: any) => s.id === subjectId);
-                localRecordsToMigrate[date].push({
-                  subject: subject?.name || subjectId,
-                  subjectId,
-                  lectures: counts.lectures,
-                  attended: counts.attended,
-                });
-              }
+              localRecordsToMigrate[date] = Object.entries(subjectsMap).map(([subjectId, counts]) => ({
+                subject: subjectsList.find((s: any) => s.id === subjectId)?.name || subjectId,
+                subjectId,
+                lectures: counts.lectures,
+                attended: counts.attended,
+              }));
             }
 
-            // Only migrate if there's at least one date
-            if (Object.keys(localRecordsToMigrate).length > 0) {
-              console.log('Migrating local records to cloud for uid:', uid, 'dates:', Object.keys(localRecordsToMigrate).length);
+            // Ask the user what to do using an Alert
+            // Wrap Alert in a Promise so we can await user's choice
+            const choice: 'upload_clear' | 'upload' | 'skip' = await new Promise((resolve) => {
+              Alert.alert(
+                'Migrate local attendance?',
+                'We found attendance data saved locally. Would you like to upload it to your account? You can also choose to clear local copies after upload.',
+                [
+                  { text: 'Upload & Clear', onPress: () => resolve('upload_clear') },
+                  { text: 'Upload only', onPress: () => resolve('upload') },
+                  { text: 'Skip', style: 'cancel', onPress: () => resolve('skip') },
+                ],
+                { cancelable: true }
+              );
+            });
+
+            if (choice === 'upload' || choice === 'upload_clear') {
+              console.log('User chose to upload local data, dates:', Object.keys(localRecordsToMigrate).length);
               await migrateLocalToCloud(uid, localRecordsToMigrate);
-              console.log('Migration finished');
+              console.log('Local data uploaded to cloud');
+              if (choice === 'upload_clear') {
+                await Promise.all([
+                  AsyncStorage.removeItem('@attendance_records'),
+                  AsyncStorage.removeItem('@attendance_days'),
+                  AsyncStorage.removeItem('@attendance_subjects'),
+                ]);
+                console.log('Local data cleared after upload');
+              }
             } else {
-              console.log('No local attendance records found to migrate');
+              console.log('User skipped migration of local data');
             }
-          } else {
-            console.log('No local records present; skipping migration');
           }
         }
       } catch (migrationError) {

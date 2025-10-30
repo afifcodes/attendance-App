@@ -47,59 +47,9 @@ const AttendanceProviderInner = () => {
       }
       if (recordsData) {
 
-  // Handle actions when a user logs in: migrate local data and hydrate from cloud
+  // Handle actions when a user logs in: hydrate app state from cloud
   const handleUserLogin = useCallback(async (uid: string) => {
     try {
-      // If local records exist, migrate them to cloud first
-      const recordsData = await AsyncStorage.getItem(STORAGE_KEYS.RECORDS);
-      if (recordsData) {
-        try {
-          const recordsList = JSON.parse(recordsData) as Array<any>;
-
-          // Build map date -> entries as used by migrateLocalToCloud
-          const dateMap: Record<string, Array<any>> = {};
-          const subjectsData = await AsyncStorage.getItem(STORAGE_KEYS.SUBJECTS);
-          const subjectsList = subjectsData ? JSON.parse(subjectsData) as Array<any> : [];
-
-          recordsList.forEach((r: any) => {
-            const date = r.date;
-            const subjectId = r.subjectId || r.subject || 'unknown';
-            dateMap[date] = dateMap[date] || [];
-          });
-
-          // For each date, reconstruct entries from recordsList
-          for (const date of Object.keys(dateMap)) {
-            const rows = recordsList.filter(r => r.date === date && r.status !== 'no-lecture');
-            const map: Record<string, { lectures: number; attended: number }> = {};
-            rows.forEach((r: any) => {
-              const sid = r.subjectId || r.subject || 'unknown';
-              if (!map[sid]) map[sid] = { lectures: 0, attended: 0 };
-              if ((r.lectureIndex || 1) > map[sid].lectures) map[sid].lectures = r.lectureIndex || 1;
-              if (r.status === 'present') map[sid].attended += 1;
-            });
-
-            dateMap[date] = Object.entries(map).map(([sid, counts]) => ({
-              subject: subjectsList.find((s: any) => s.id === sid)?.name || sid,
-              subjectId: sid,
-              lectures: counts.lectures,
-              attended: counts.attended,
-            }));
-          }
-
-          if (Object.keys(dateMap).length > 0) {
-            await migrateLocalToCloud(uid, dateMap);
-            // Clear local cache after successful migration
-            await Promise.all([
-              AsyncStorage.removeItem(STORAGE_KEYS.RECORDS),
-              AsyncStorage.removeItem(STORAGE_KEYS.DAYS),
-              AsyncStorage.removeItem(STORAGE_KEYS.SUBJECTS),
-            ]);
-          }
-        } catch (migrationErr) {
-          console.error('Error migrating local records on login:', migrationErr);
-        }
-      }
-
       // Hydrate app state from cloud: list all attendance days and reconstruct records/subjects
       const docs = await listAllAttendanceDays(uid);
       const newRecords: AttendanceRecord[] = [];
