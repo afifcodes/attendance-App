@@ -58,6 +58,7 @@ class ProfileService {
             analytics: true,
           },
         },
+        targetPercentage: 75,
       };
 
       await this.saveProfile(newProfile);
@@ -349,6 +350,23 @@ class ProfileService {
 
   private notifyListeners(): void {
     this.listeners.forEach(listener => listener(this.profile));
+  }
+
+  async updateTargetPercentage(targetPercentage: number): Promise<UserProfile> {
+    if (!this.profile) {
+      throw new Error('Profile not initialized');
+    }
+
+    try {
+      const updatedProfile = { ...this.profile, targetPercentage };
+      await this.saveProfile(updatedProfile);
+      this.profile = updatedProfile;
+      this.notifyListeners();
+      return updatedProfile;
+    } catch (error) {
+      console.error('Error updating target percentage:', error);
+      throw error;
+    }
   }
 
   getCurrentProfile(): UserProfile | null {

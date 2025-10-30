@@ -78,13 +78,14 @@ class DatabaseService {
   async getSubjects(): Promise<Subject[]> {
     if (!this.db) throw new Error('Database not initialized');
 
-    const result = await this.db.getAllAsync(
+    const result: any[] = await this.db.getAllAsync(
       'SELECT * FROM subjects ORDER BY createdAt ASC'
     );
-    
+
     return result.map(row => ({
       id: row.id as string,
       name: row.name as string,
+      code: (row.code as string) || '',
       color: row.color as string,
       totalClasses: row.totalClasses as number,
       attendedClasses: row.attendedClasses as number,
@@ -102,7 +103,7 @@ class DatabaseService {
     for (const record of records) {
       await this.db.runAsync(
         'INSERT INTO attendance_records (id, subjectId, date, attended) VALUES (?, ?, ?, ?)',
-        [record.id, record.subjectId, record.date, record.attended ? 1 : 0]
+        [record.id, record.subjectId, record.date, record.status === 'present' ? 1 : 0]
       );
     }
   }
@@ -110,15 +111,17 @@ class DatabaseService {
   async getAttendanceRecords(): Promise<AttendanceRecord[]> {
     if (!this.db) throw new Error('Database not initialized');
 
-    const result = await this.db.getAllAsync(
+    const result: any[] = await this.db.getAllAsync(
       'SELECT * FROM attendance_records ORDER BY date DESC'
     );
-    
+
+    // Map legacy DB rows (which used 'attended' int) to current AttendanceRecord shape
     return result.map(row => ({
       id: row.id as string,
       subjectId: row.subjectId as string,
       date: row.date as string,
-      attended: (row.attended as number) === 1,
+      lectureIndex: (row.lectureIndex as number) || 1,
+      status: (row.attended as number) === 1 ? 'present' : 'absent',
     }));
   }
 
@@ -139,10 +142,10 @@ class DatabaseService {
   async getDays(): Promise<DayRecord[]> {
     if (!this.db) throw new Error('Database not initialized');
 
-    const result = await this.db.getAllAsync(
+    const result: any[] = await this.db.getAllAsync(
       'SELECT * FROM days ORDER BY date DESC'
     );
-    
+
     return result.map(row => ({
       date: row.date as string,
       isHoliday: (row.isHoliday as number) === 1,
@@ -163,11 +166,11 @@ class DatabaseService {
   async getSetting(key: string): Promise<string | null> {
     if (!this.db) throw new Error('Database not initialized');
 
-    const result = await this.db.getFirstAsync(
+    const result: any = await this.db.getFirstAsync(
       'SELECT value FROM settings WHERE key = ?',
       [key]
     );
-    
+
     return result ? (result.value as string) : null;
   }
 
@@ -187,7 +190,7 @@ class DatabaseService {
     // Get all settings
     const settingsResult = await this.db!.getAllAsync('SELECT key, value FROM settings');
     const settings: Record<string, string> = {};
-    settingsResult.forEach(row => {
+    (settingsResult as any[]).forEach(row => {
       settings[row.key as string] = row.value as string;
     });
 

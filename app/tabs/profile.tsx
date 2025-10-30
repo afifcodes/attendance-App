@@ -282,31 +282,37 @@ export default function ProfileScreen() {
             )}
           </View>
 
-          {/* Stats Cards */}
-          <View style={styles.statsContainer}>
-            <View style={[styles.statCard, {
-              backgroundColor: theme.colors.surface,
-              shadowColor: theme.colors.shadow
-            }]}>
-              <Ionicons name="flame" size={24} color="#FF6B35" />
-              <Text style={[styles.statValue, { color: theme.colors.text }]}>{user?.streakCount || 0}</Text>
-              <Text style={[styles.statLabel, { color: theme.colors.textSecondary }]}>Streak</Text>
-            </View>
-            <View style={[styles.statCard, {
-              backgroundColor: theme.colors.surface,
-              shadowColor: theme.colors.shadow
-            }]}>
-            <Ionicons name="calendar-sharp" size={24} color="#4ECDC4" />
-              <Text style={[styles.statValue, { color: theme.colors.text }]}>{user?.totalAttendanceDays || 0}</Text>
-              <Text style={[styles.statLabel, { color: theme.colors.textSecondary }]}>Days</Text>
-            </View>
-            <View style={[styles.statCard, {
-              backgroundColor: theme.colors.surface,
-              shadowColor: theme.colors.shadow
-            }]}>
-              <Ionicons name="trophy" size={24} color="#FFD93D" />
-              <Text style={[styles.statValue, { color: theme.colors.text }]}>{user?.achievements?.length || 0}</Text>
-              <Text style={[styles.statLabel, { color: theme.colors.textSecondary }]}>Achievements</Text>
+          {/* Target Attendance Card */}
+          <View style={[styles.targetContainer, {
+            backgroundColor: theme.colors.surface,
+            shadowColor: theme.colors.shadow
+          }]}>
+            <Text style={[styles.targetTitle, { color: theme.colors.text }]}>Target Attendance</Text>
+            <View style={styles.targetInputRow}>
+              <TextInput
+                style={[{
+                  backgroundColor: theme.colors.background,
+                  color: theme.colors.text,
+                  borderColor: theme.colors.border
+                }, styles.targetInput]}
+                keyboardType="numeric"
+                placeholder="75"
+                placeholderTextColor={theme.colors.textSecondary}
+                value={user?.targetPercentage?.toString() || '75'}
+                onChangeText={(value) => {
+                  // Allow backspace/delete
+                  if (value === '') {
+                    profileService.updateTargetPercentage(75);
+                    return;
+                  }
+                  const numericValue = value.replace(/[^0-9]/g, '');
+                  if (numericValue === '' || (parseInt(numericValue) >= 0 && parseInt(numericValue) <= 100)) {
+                    // Update target percentage
+                    profileService.updateTargetPercentage(parseInt(numericValue) || 75);
+                  }
+                }}
+              />
+              <Text style={[styles.percentSymbol, { color: theme.colors.textSecondary }]}>%</Text>
             </View>
           </View>
 
@@ -542,6 +548,41 @@ const styles = StyleSheet.create({
   editActionText: {
     color: '#FFF',
     fontSize: 16,
+    fontWeight: '600',
+  },
+  targetContainer: {
+    backgroundColor: '#FFF',
+    borderRadius: 16,
+    padding: 20,
+    alignItems: 'center',
+    marginBottom: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  targetTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1A1A1A',
+    marginBottom: 12,
+  },
+  targetInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  targetInput: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 16,
+    minWidth: 60,
+    textAlign: 'center',
+  },
+  percentSymbol: {
+    fontSize: 18,
     fontWeight: '600',
   },
 });

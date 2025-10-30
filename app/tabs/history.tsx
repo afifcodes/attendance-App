@@ -9,6 +9,7 @@ import {
   Modal,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { format as formatDateFn } from 'date-fns';
 import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, X, BookOpen } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { useAttendance } from '@/contexts/AttendanceContext';
@@ -82,8 +83,8 @@ export default function HistoryScreen() {
   };
 
   const getDayStatus = (date: Date): { color: string; hasRecords: boolean } => {
-    const dateStr = date.toISOString().split('T')[0];
-    const dayRecords = getRecordsForDate(dateStr);
+  const dateStr = formatDateFn(date, 'yyyy-MM-dd');
+  const dayRecords = getRecordsForDate(dateStr);
 
     if (dayRecords.length === 0) {
       return { color: 'transparent', hasRecords: false };
@@ -125,8 +126,8 @@ export default function HistoryScreen() {
 
     for (let day = 1; day <= lastDay.getDate(); day++) {
       const date = new Date(year, month, day);
-      const dateStr = date.toISOString().split('T')[0];
-      const dayRecords = getRecordsForDate(dateStr);
+  const dateStr = formatDateFn(date, 'yyyy-MM-dd');
+  const dayRecords = getRecordsForDate(dateStr);
 
       totalClasses += dayRecords.length;
       attendedClasses += dayRecords.filter(r => r.status === 'present').length;
@@ -140,8 +141,8 @@ export default function HistoryScreen() {
   // Data preparation for day details
   const getDayData = useMemo(() => {
     if (!selectedDate) return null;
-    const dateStr = selectedDate.toISOString().split('T')[0];
-    const dayRecords = getRecordsForDate(dateStr);
+  const dateStr = formatDateFn(selectedDate, 'yyyy-MM-dd');
+  const dayRecords = getRecordsForDate(dateStr);
     const subjectMap = new Map();
 
     // Group by subject
@@ -182,8 +183,8 @@ export default function HistoryScreen() {
     const lastDay = new Date(year, month + 1, 0);
     for (let day = 1; day <= lastDay.getDate(); day++) {
       const date = new Date(year, month, day);
-      const dateStr = date.toISOString().split('T')[0];
-      const dayRecords = getRecordsForDate(dateStr);
+  const dateStr = formatDateFn(date, 'yyyy-MM-dd');
+  const dayRecords = getRecordsForDate(dateStr);
 
       dayRecords.filter(r => r.status !== 'no-lecture').forEach(record => {
         const existing = subjectMap.get(record.subjectId);
@@ -229,16 +230,16 @@ export default function HistoryScreen() {
 
         <View style={styles.calendarCard}>
           <View style={styles.calendarHeader}>
-            <TouchableOpacity onPress={previousMonth} style={styles.navButton}>
-              <ChevronLeft color={AppColors.gray[700]} size={24} />
+            <TouchableOpacity onPress={previousMonth} style={[styles.navButton, styles.navButtonLarge]}>
+              <ChevronLeft color={theme.colors.primary} size={32} />
             </TouchableOpacity>
             <TouchableOpacity onPress={onMonthPress}>
               <Text style={styles.monthTitle}>
                 {MONTHS[currentDate.getMonth()]} {currentDate.getFullYear()}
               </Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={nextMonth} style={styles.navButton}>
-              <ChevronRight color={AppColors.gray[700]} size={24} />
+            <TouchableOpacity onPress={nextMonth} style={[styles.navButton, styles.navButtonLarge]}>
+              <ChevronRight color={theme.colors.primary} size={32} />
             </TouchableOpacity>
           </View>
 
@@ -618,5 +619,12 @@ const createStyles = (theme: any) => StyleSheet.create({
     fontSize: 16,
     color: theme.colors.textSecondary,
     textAlign: 'center',
+  },
+  navButtonLarge: {
+    width: 48,
+    height: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: theme.colors.gray[100],
   },
 });

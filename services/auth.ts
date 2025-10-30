@@ -31,7 +31,8 @@ class AuthService {
   // Sign in with email and password
   async signInWithEmail(email: string, password: string): Promise<AuthUser> {
     try {
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const activeAuth = this.getAuthOrThrow();
+      const userCredential = await signInWithEmailAndPassword(activeAuth, email, password);
       return this.mapFirebaseUser(userCredential.user);
     } catch (error: any) {
       console.error('Error signing in with email:', error);
@@ -42,7 +43,8 @@ class AuthService {
   // Create account with email and password
   async createAccountWithEmail(email: string, password: string, displayName?: string): Promise<AuthUser> {
     try {
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const activeAuth = this.getAuthOrThrow();
+      const userCredential = await createUserWithEmailAndPassword(activeAuth, email, password);
       
       // Update display name if provided
       if (displayName && userCredential.user) {
@@ -74,7 +76,8 @@ class AuthService {
       const googleCredential = GoogleAuthProvider.credential(idToken);
 
       // Sign in to Firebase with the credential
-      const userCredential = await signInWithCredential(auth, googleCredential);
+  const activeAuth = this.getAuthOrThrow();
+  const userCredential = await signInWithCredential(activeAuth, googleCredential);
 
       return this.mapFirebaseUser(userCredential.user);
     } catch (error: any) {
@@ -99,7 +102,7 @@ class AuthService {
   async signOut(): Promise<void> {
     try {
       console.log('Starting sign out process...');
-      await firebaseSignOut(auth);
+      await firebaseSignOut(this.getAuthOrThrow());
       console.log('Firebase sign out completed, clearing Google Sign-In...');
       // Also sign out from Google Sign-In if using Google auth
       try {
@@ -116,13 +119,13 @@ class AuthService {
 
   // Get current user
   getCurrentUser(): AuthUser | null {
-    const user = auth.currentUser;
+    const user = this.getAuthOrThrow().currentUser;
     return user ? this.mapFirebaseUser(user) : null;
   }
 
   // Listen to auth state changes
   onAuthStateChanged(callback: (user: AuthUser | null) => void) {
-    return firebaseOnAuthStateChanged(auth, (user) => {
+    return firebaseOnAuthStateChanged(this.getAuthOrThrow(), (user) => {
       callback(user ? this.mapFirebaseUser(user) : null);
     });
   }
@@ -139,12 +142,20 @@ class AuthService {
 
   // Check if user is authenticated
   isAuthenticated(): boolean {
-    return !!auth.currentUser;
+    return !!this.getAuthOrThrow().currentUser;
   }
 
   // Get user ID
   getUserId(): string | null {
-    return auth.currentUser?.uid || null;
+    return this.getAuthOrThrow().currentUser?.uid || null;
+  }
+
+  // Helper to ensure auth is available at runtime
+  private getAuthOrThrow() {
+    if (!auth) {
+      throw new Error('Firebase auth not initialized');
+    }
+    return auth;
   }
 }
 

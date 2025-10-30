@@ -17,6 +17,20 @@ lectureIndex: number; // 1, 2, 3 for multiple lectures on the same day
 status: 'present' | 'absent' | 'no-lecture';
 }
 
+// Simplified structure for attendance entry in the modal
+export interface LectureEntry {
+  subjectId: string;
+  lectures: number;
+  attended: number;
+}
+
+// Structure for the attendance summary display
+export interface DayAttendanceSummary {
+  subject: string;
+  lectures: number;
+  attended: number;
+}
+
 export interface DayRecord {
   date: string;
   isHoliday: boolean;

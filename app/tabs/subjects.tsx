@@ -11,6 +11,7 @@ import {
   Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { format as formatDateFn } from 'date-fns';
 import { Plus, Trash2, Edit2, BookOpen, CheckCircle, XCircle } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { useAttendance } from '@/contexts/AttendanceContext';
@@ -29,7 +30,7 @@ export default function SubjectsScreen() {
   const [targetPercentage, setTargetPercentage] = useState<number>(75);
   const [showMarkModal, setShowMarkModal] = useState<boolean>(false);
   const [markingSubject, setMarkingSubject] = useState<string | null>(null);
-  const [markDate, setMarkDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [markDate, setMarkDate] = useState<string>(formatDateFn(new Date(), 'yyyy-MM-dd'));
   const [errors, setErrors] = useState<{name?: string}>({});
 
   // Determine if form is valid for submit button
@@ -136,7 +137,9 @@ export default function SubjectsScreen() {
 
   const handleMarkAttendance = (attended: boolean) => {
     if (markingSubject) {
-      markAttendance(markingSubject, markDate, attended);
+      // convert boolean to status string expected by markAttendance
+      const status = attended ? 'present' : 'absent';
+      markAttendance(markingSubject, markDate, status);
       setShowMarkModal(false);
       setMarkingSubject(null);
       if (Platform.OS !== 'web') {
@@ -191,7 +194,7 @@ export default function SubjectsScreen() {
                         style={[styles.actionButton, { backgroundColor: theme.colors.surface }]}
                         onPress={() => {
                           setMarkingSubject(subject.id);
-                          setMarkDate(new Date().toISOString().split('T')[0]);
+                          setMarkDate(formatDateFn(new Date(), 'yyyy-MM-dd'));
                           setShowMarkModal(true);
                           if (Platform.OS !== 'web') {
                             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

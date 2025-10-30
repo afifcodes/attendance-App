@@ -12,6 +12,7 @@ export interface UserProfile {
   totalAttendanceDays: number;
   achievements: Achievement[];
   preferences: UserPreferences;
+  targetPercentage: number;
 }
 
 export interface Achievement {

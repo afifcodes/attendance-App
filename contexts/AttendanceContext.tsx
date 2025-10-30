@@ -1,7 +1,7 @@
 import createContextHook from '@nkzw/create-context-hook';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import type { Subject, AttendanceRecord, DayRecord, AttendanceStats } from '@/types/Attendance';
+import type { Subject, AttendanceRecord, DayRecord, AttendanceStats, LectureEntry } from '@/types/Attendance';
 import { useLoading } from './LoadingContext';
 import { handleError, createAsyncHandler } from '@/utils/errorHandler';
 
@@ -118,10 +118,14 @@ const AttendanceProviderInner = () => {
 
   const markAttendance = useCallback((subjectId: string, date: string, status: 'present' | 'absent' | 'no-lecture', lectureIndex?: number) => {
     let newRecords: AttendanceRecord[];
+
+    // Use the provided date directly for storage. UI should pass the date intended for the record.
+    const targetDate = date;
+
     if (lectureIndex !== undefined) {
       // Target specific lecture
       const existingIndex = records.findIndex(
-        r => r.subjectId === subjectId && r.date === date && r.lectureIndex === lectureIndex
+        r => r.subjectId === subjectId && r.date === targetDate && r.lectureIndex === lectureIndex
       );
 
       if (existingIndex >= 0) {
@@ -132,7 +136,7 @@ const AttendanceProviderInner = () => {
         const newRecord: AttendanceRecord = {
           id: Date.now().toString(),
           subjectId,
-          date,
+          date: targetDate,
           lectureIndex,
           status,
         };
@@ -140,13 +144,13 @@ const AttendanceProviderInner = () => {
       }
     } else {
       // Add new lecture with next index
-      const subjectDateRecords = records.filter(r => r.subjectId === subjectId && r.date === date);
+      const subjectDateRecords = records.filter(r => r.subjectId === subjectId && r.date === targetDate);
       const maxIndex = subjectDateRecords.length > 0 ? Math.max(...subjectDateRecords.map(r => r.lectureIndex)) : 0;
       const newIndex = maxIndex + 1;
       const newRecord: AttendanceRecord = {
         id: Date.now().toString(),
         subjectId,
-        date,
+        date: targetDate,
         lectureIndex: newIndex,
         status,
       };
@@ -171,15 +175,19 @@ const AttendanceProviderInner = () => {
 
   const markAllAttendance = useCallback((date: string, status: 'present' | 'absent') => {
     console.log('markAllAttendance called with date:', date, 'status:', status, 'subjects count:', subjects.length, 'subjects ids:', subjects.map(s => s.id));
+
+    // Use provided date directly for storage (UI passes the date intended for the record)
+    const adjustedDate = date;
+
     let newRecords = [...records];
     let newSubjects = [...subjects];
 
     // Subjects that need a new record added
     const subjectsToAdd = new Set(subjects.map(s => s.id));
 
-    // Update all existing records for the date that are not 'no-lecture'
+    // Update all existing records for the adjusted date that are not 'no-lecture'
     newRecords.forEach((record, index) => {
-      if (record.date === date && record.status !== 'no-lecture') {
+      if (record.date === adjustedDate && record.status !== 'no-lecture') {
         newRecords[index] = { ...record, status };
         subjectsToAdd.delete(record.subjectId);
       }
@@ -190,7 +198,7 @@ const AttendanceProviderInner = () => {
       const newRecord: AttendanceRecord = {
         id: Date.now().toString() + Math.random(),
         subjectId,
-        date,
+        date: adjustedDate,
         lectureIndex: 1,
         status,
       };
@@ -355,6 +363,69 @@ const AttendanceProviderInner = () => {
     return records.filter(r => r.date === date);
   }, [records]);
 
+  const deleteLecture = useCallback((subjectId: string, date: string, lectureIndex: number) => {
+    const newRecords = records.filter(
+      r => !(r.subjectId === subjectId && r.date === date && r.lectureIndex === lectureIndex)
+    );
+
+    // Recalculate subject stats after deletion
+    const subject = subjects.find(s => s.id === subjectId);
+    if (subject) {
+      const subjectRecords = newRecords.filter(r => r.subjectId === subjectId);
+      const total = subjectRecords.filter(r => r.status !== 'no-lecture').length;
+      const attendedCount = subjectRecords.filter(r => r.status === 'present').length;
+
+      updateSubject(subjectId, {
+        totalClasses: total,
+        attendedClasses: attendedCount,
+      });
+    }
+
+    saveRecords(newRecords);
+  }, [records, subjects, updateSubject]);
+
+  const saveDayAttendance = useCallback((date: string, entries: LectureEntry[]) => {
+    let newRecords = records.filter(r => r.date !== date);
+    let newSubjects = [...subjects];
+    const subjectIdsToRecalculate = new Set<string>();
+
+    // 1. Generate new AttendanceRecords from LectureEntry
+    entries.forEach(entry => {
+      subjectIdsToRecalculate.add(entry.subjectId);
+      for (let i = 1; i <= entry.lectures; i++) {
+        const status: 'present' | 'absent' = i <= entry.attended ? 'present' : 'absent';
+        const newRecord: AttendanceRecord = {
+          id: `${date}-${entry.subjectId}-${i}`, // Deterministic ID for a given date/subject/index
+          subjectId: entry.subjectId,
+          date,
+          lectureIndex: i,
+          status,
+        };
+        newRecords.push(newRecord);
+      }
+    });
+
+    // 2. Recalculate stats for affected subjects
+    subjectIdsToRecalculate.forEach(subjectId => {
+      const subjectRecords = newRecords.filter(r => r.subjectId === subjectId);
+      const total = subjectRecords.filter(r => r.status !== 'no-lecture').length;
+      const attendedCount = subjectRecords.filter(r => r.status === 'present').length;
+
+      const subjectIndex = newSubjects.findIndex(s => s.id === subjectId);
+      if (subjectIndex >= 0) {
+        newSubjects[subjectIndex] = {
+          ...newSubjects[subjectIndex],
+          totalClasses: total,
+          attendedClasses: attendedCount,
+        };
+      }
+    });
+
+    // 3. Save all changes
+    saveRecords(newRecords);
+    saveSubjects(newSubjects);
+  }, [records, subjects, saveRecords, saveSubjects]);
+
   const updateDayNotes = useCallback((date: string, notes: string) => {
     const existingIndex = days.findIndex(d => d.date === date);
     let newDays: DayRecord[];
@@ -390,7 +461,9 @@ const AttendanceProviderInner = () => {
     isHoliday,
     getRecordsForDate,
     updateDayNotes,
-  }), [subjects, records, days, targetPercentage, isLoading, addSubject, updateSubject, deleteSubject, markAttendance, markAllAttendance, toggleHoliday, getSubjectStats, getOverallStats, updateTargetPercentage, isHoliday, getRecordsForDate, updateDayNotes]);
+    deleteLecture,
+    saveDayAttendance,
+  }), [subjects, records, days, targetPercentage, isLoading, addSubject, updateSubject, deleteSubject, markAttendance, markAllAttendance, toggleHoliday, getSubjectStats, getOverallStats, updateTargetPercentage, isHoliday, getRecordsForDate, updateDayNotes, deleteLecture, saveDayAttendance]);
 };
 
 export const [AttendanceProvider, useAttendance] = createContextHook(AttendanceProviderInner);

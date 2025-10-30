@@ -2,6 +2,7 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
 import type { Subject, AttendanceRecord, DayRecord } from '@/types/Attendance';
+import { format as formatDateFn } from 'date-fns';
 
 export interface ExportOptions {
   includeSubjects: boolean;
@@ -73,11 +74,11 @@ class ExportService {
         csvContent += this.generateRecordsCSV(records, subjects);
       }
 
-      const fileName = `attendance-report-${new Date().toISOString().split('T')[0]}.csv`;
-      const fileUri = FileSystem.documentDirectory + fileName;
+  const fileName = `attendance-report-${formatDateFn(new Date(), 'yyyy-MM-dd')}.csv`;
+      const fileUri = (FileSystem as any).documentDirectory + fileName;
       
-      await FileSystem.writeAsStringAsync(fileUri, csvContent, {
-        encoding: FileSystem.EncodingType.UTF8,
+      await (FileSystem as any).writeAsStringAsync(fileUri, csvContent, {
+        encoding: (FileSystem as any).EncodingType.UTF8,
       });
 
       return fileUri;
@@ -303,8 +304,8 @@ class ExportService {
           <tr>
             <td>${new Date(date).toLocaleDateString()}</td>
             <td style="color: ${subject?.color || '#000'};">${subject?.name || 'Unknown Subject'}</td>
-            <td><span class="status-badge ${record.attended ? 'status-safe' : 'status-danger'}">
-              ${record.attended ? 'PRESENT' : 'ABSENT'}
+            <td><span class="status-badge ${record.status === 'present' ? 'status-safe' : 'status-danger'}">
+              ${record.status === 'present' ? 'PRESENT' : 'ABSENT'}
             </span></td>
           </tr>
         `;
@@ -380,7 +381,7 @@ class ExportService {
     
     sortedRecords.forEach(record => {
       const subject = subjectMap.get(record.subjectId);
-      csv += `"${new Date(record.date).toLocaleDateString()}","${subject?.name || 'Unknown Subject'}","${record.attended ? 'PRESENT' : 'ABSENT'}"\n`;
+  csv += `"${new Date(record.date).toLocaleDateString()}","${subject?.name || 'Unknown Subject'}","${record.status === 'present' ? 'PRESENT' : 'ABSENT'}"\n`;
     });
 
     return csv;

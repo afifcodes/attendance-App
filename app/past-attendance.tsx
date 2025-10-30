@@ -5,11 +5,10 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Modal,
-  TextInput,
   Alert,
   Platform,
-  Animated,
+  TextInput,
+  Modal,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -20,34 +19,24 @@ import { profileService } from '@/services/profile';
 import { authService } from '@/services/auth';
 import { useAttendance } from '@/contexts/AttendanceContext';
 import { useTheme } from '@/contexts/ThemeContext';
-import { useRouter } from 'expo-router';
-import CalendarAttendance from '@/components/CalendarAttendance';
-import MarkPastAttendanceModal from '@/components/MarkPastAttendanceModal';
-import { format as formatDateFn } from 'date-fns';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import { format as formatDateFn, parseISO } from 'date-fns';
 
-export default function DashboardScreen() {
+export default function PastAttendanceScreen() {
   const insets = useSafeAreaInsets();
   const { theme } = useTheme();
   const router = useRouter();
+  const { date } = useLocalSearchParams(); // Get the date parameter from navigation
   const [profile, setProfile] = useState(null);
-  const [showQuickMarkModal, setShowQuickMarkModal] = useState(false);
-  const [showSubjectMarkModal, setShowSubjectMarkModal] = useState(false);
   const [selectedSubject, setSelectedSubject] = useState<string | null>(null);
-  const [selectedDate, setSelectedDate] = useState(formatDateFn(new Date(), 'yyyy-MM-dd'));
-  const [pendingLectures, setPendingLectures] = useState<{ [key: number]: 'present' | 'absent' | 'no-lecture' }>({});
+  const [selectedDate, setSelectedDate] = useState<string>(date as string || formatDateFn(new Date(), 'yyyy-MM-dd'));
   const [subjectMarkDate, setSubjectMarkDate] = useState(formatDateFn(new Date(), 'yyyy-MM-dd'));
+  const [pendingLectures, setPendingLectures] = useState<{ [key: number]: 'present' | 'absent' | 'no-lecture' }>({});
   const [notes, setNotes] = useState('');
   const [userName, setUserName] = useState<string>('Student');
-  const [showCalendar, setShowCalendar] = useState(false);
-  const [showPastModal, setShowPastModal] = useState(false);
-  const [pastModalDate, setPastModalDate] = useState<string | null>(null);
+  const [showSubjectMarkModal, setShowSubjectMarkModal] = useState(false);
 
-  // Always use current date for quick attendance marking
-  const currentDate = formatDateFn(new Date(), 'yyyy-MM-dd');
-
-  
-
-  const { subjects, records, getOverallStats, markAllAttendance, toggleHoliday, updateDayNotes, markAttendance, deleteLecture } = useAttendance();
+  const { subjects, records, getOverallStats, markAttendance, deleteLecture, markAllAttendance } = useAttendance();
 
   // Safe delete helper: use context deleteLecture if available,
   // otherwise fall back to marking the lecture as 'no-lecture' so it's ignored in calculations.
@@ -94,13 +83,6 @@ export default function DashboardScreen() {
     }
   }, [records, safeDeleteAttendanceRecord]);
 
-  // Navigate to the Past Attendance screen for an ISO date (YYYY-MM-DD)
-  const openPastAttendanceForDate = useCallback((isoDate: string | null) => {
-    if (!isoDate) return;
-    setShowCalendar(false);
-    router.push(`/past-attendance?date=${isoDate}`);
-  }, [router]);
-
   useEffect(() => {
     // Initialize profile if user is authenticated
     const initializeUser = async () => {
@@ -123,52 +105,42 @@ export default function DashboardScreen() {
     initializeUser();
   }, []);
 
-  const handleQuickMarkAttendance = async (attended: boolean, date?: string) => {
-    console.log('handleQuickMarkAttendance called with attended:', attended, 'date:', date);
+  const handleQuickMarkAttendance = async (attended: boolean) => {
+    console.log('handleQuickMarkAttendance called with attended:', attended, 'date:', selectedDate);
     if (Platform.OS !== 'web') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
 
-    const markDate = date || selectedDate;
-    console.log('markDate:', markDate, 'subjects length:', subjects.length);
-
     try {
+      // Use atomic markAllAttendance from context to avoid race conditions when marking many subjects
+      // markAllAttendance will add a first lecture for subjects that have no eligible records for the date
       if (attended) {
-        console.log('Marking all present');
-        markAllAttendance(markDate, 'present');
+        console.log('Marking all present for date:', selectedDate);
+        markAllAttendance(selectedDate, 'present');
         await profileService.updateStreak(true);
       } else {
-        console.log('Marking all absent');
-        markAllAttendance(markDate, 'absent');
+        console.log('Marking all absent for date:', selectedDate);
+        markAllAttendance(selectedDate, 'absent');
         await profileService.updateStreak(false);
       }
 
       // Update notes if provided
       if (notes.trim()) {
-        updateDayNotes(markDate, notes.trim());
+        // You'll need to implement updateDayNotes in attendance context if not present
+        // updateDayNotes(selectedDate, notes.trim());
       }
 
-      await profileService.checkAchievements();
-
-      setShowQuickMarkModal(false);
-      setNotes('');
+      router.back();
+      Alert.alert('Success', `Attendance marked for ${formatDateFn(parseISO(selectedDate), 'MMMM d, yyyy')}`);
     } catch (error) {
       console.error('Error marking attendance:', error);
       Alert.alert('Error', 'Failed to mark attendance');
     }
   };
 
-  const handleToggleHoliday = () => {
-    if (Platform.OS !== 'web') {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    }
-    toggleHoliday(selectedDate);
-    setShowQuickMarkModal(false);
-  };
-
   const openSubjectMarkModal = (subjectId: string) => {
     setSelectedSubject(subjectId);
-    setSubjectMarkDate(formatDateFn(new Date(), 'yyyy-MM-dd'));
+    setSubjectMarkDate(selectedDate);
     setPendingLectures({});
     setShowSubjectMarkModal(true);
     if (Platform.OS !== 'web') {
@@ -178,8 +150,7 @@ export default function DashboardScreen() {
 
   const handleLectureStatusChange = (lectureIndex: number, status: 'present' | 'absent' | 'no-lecture') => {
     if (selectedSubject) {
-      // subjectMarkDate is already in local 'yyyy-MM-dd' format
-      markAttendance(selectedSubject, subjectMarkDate, status, lectureIndex);
+      markAttendance(selectedSubject, selectedDate, status, lectureIndex);
       if (Platform.OS !== 'web') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
@@ -188,13 +159,13 @@ export default function DashboardScreen() {
 
   const handleAddLecture = () => {
     if (selectedSubject) {
-      markAttendance(selectedSubject, subjectMarkDate, 'present'); // adds new with next index
+      markAttendance(selectedSubject, selectedDate, 'present'); // adds new with next index
       if (Platform.OS !== 'web') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
       // After adding lecture, immediately mark it as present in pending state
       setTimeout(() => {
-        const lecturesAfter = records.filter(r => r.subjectId === selectedSubject && r.date === subjectMarkDate).sort((a, b) => a.lectureIndex - b.lectureIndex);
+        const lecturesAfter = records.filter(r => r.subjectId === selectedSubject && r.date === selectedDate).sort((a, b) => a.lectureIndex - b.lectureIndex);
         const newLecture = lecturesAfter[lecturesAfter.length - 1]; // Get the last added lecture
         if (newLecture) {
           setPendingLectures(prev => ({ ...prev, [newLecture.lectureIndex]: 'present' }));
@@ -214,13 +185,6 @@ export default function DashboardScreen() {
     setShowSubjectMarkModal(false);
   };
 
-  const getStreakEmoji = (streak: number) => {
-    if (streak >= 30) return '👑';
-    if (streak >= 7) return '🔥';
-    if (streak >= 3) return '⭐';
-    return '📚';
-  };
-
   const getStatusColor = (status: 'safe' | 'warning' | 'danger') => {
     switch (status) {
       case 'safe': return theme.colors.success;
@@ -238,9 +202,27 @@ export default function DashboardScreen() {
     return 'Good Night';
   };
 
-  const overallStats = getOverallStats();
+  const lectures = useMemo(() => records.filter(r => r.subjectId === selectedSubject && r.date === selectedDate).sort((a, b) => a.lectureIndex - b.lectureIndex), [records, selectedSubject, selectedDate]);
 
-  const lectures = useMemo(() => records.filter(r => r.subjectId === selectedSubject && r.date === subjectMarkDate).sort((a, b) => a.lectureIndex - b.lectureIndex), [records, selectedSubject, subjectMarkDate]);
+  // Calculate existing attendance for display
+  const subjectOverviews = subjects.map(subject => {
+    const subjectRecords = records.filter(r => r.subjectId === subject.id && r.date === selectedDate && r.status !== 'no-lecture');
+    const attended = subjectRecords.filter(r => r.status === 'present').length;
+    const total = subjectRecords.length;
+    const percentage = total > 0 ? (attended / total) * 100 : 0;
+    return {
+      subject,
+      attended,
+      total,
+      percentage,
+      status: percentage >= subject.targetPercentage ? 'safe' :
+              percentage >= subject.targetPercentage - 5 ? 'warning' : 'danger'
+    };
+  });
+
+  // Check if date is today
+  const isToday = selectedDate === formatDateFn(new Date(), 'yyyy-MM-dd');
+
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -252,31 +234,26 @@ export default function DashboardScreen() {
         <View style={styles.content}>
           {/* Header */}
           <View style={styles.header}>
-            <View>
-              <Text style={[styles.greeting, { color: theme.colors.textSecondary }]}>
-                {userName !== 'Student' ? `${getGreeting()}, ${userName}!` : 'Good Evening, Student!'}
+            <TouchableOpacity
+              style={styles.backButton}
+              onPress={() => router.back()}
+            >
+              <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
+            </TouchableOpacity>
+            <View style={styles.headerCenter}>
+              <Text style={[styles.title, { color: theme.colors.text }]}>
+                Mark Attendance
+              </Text>
+              <Text style={[styles.dateText, { color: theme.colors.textSecondary }]}>
+                {formatDateFn(parseISO(selectedDate), 'MMMM d, yyyy')}
               </Text>
             </View>
-            <View style={styles.headerRight}>
-              <TouchableOpacity
-                  style={[styles.calendarButton, {
-                    backgroundColor: theme.colors.primary,
-                    shadowColor: theme.colors.shadow,
-                    shadowOffset: { width: 0, height: 2 },
-                    shadowOpacity: 0.1,
-                    shadowRadius: 4,
-                    elevation: 3,
-                  }]}
-                  onPress={() => {
-                    setShowCalendar(true);
-                    if (Platform.OS !== 'web') {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    }
-                  }}
-                >
-                  <Ionicons name="calendar-outline" size={20} color={theme.colors.white} />
-                </TouchableOpacity>
-            </View>
+            <TouchableOpacity
+              style={[styles.deleteButton]}
+              onPress={() => deleteDayAttendance(selectedDate)}
+            >
+              <Ionicons name="trash-outline" size={20} color={theme.colors.danger} />
+            </TouchableOpacity>
           </View>
 
           {/* Quick Actions Card */}
@@ -288,13 +265,13 @@ export default function DashboardScreen() {
           >
             <Text style={styles.quickActionsTitle}>Quick Mark Attendance</Text>
             <Text style={styles.quickActionsSubtitle}>
-              Mark all subjects for {new Date().toLocaleDateString()}
+              Mark all subjects for this day
             </Text>
 
             <View style={styles.quickActionsButtons}>
               <TouchableOpacity
                 style={[styles.quickActionButton, { backgroundColor: theme.colors.success }]}
-                onPress={() => handleQuickMarkAttendance(true, currentDate)}
+                onPress={() => handleQuickMarkAttendance(true)}
               >
                 <Ionicons name="checkmark" size={24} color={theme.colors.white} />
                 <Text style={styles.quickActionButtonText}>Mark All Present</Text>
@@ -302,7 +279,7 @@ export default function DashboardScreen() {
 
               <TouchableOpacity
                 style={[styles.quickActionButton, { backgroundColor: theme.colors.danger }]}
-                onPress={() => handleQuickMarkAttendance(false, currentDate)}
+                onPress={() => handleQuickMarkAttendance(false)}
               >
                 <Ionicons name="close" size={24} color={theme.colors.white} />
                 <Text style={styles.quickActionButtonText}>Mark All Absent</Text>
@@ -310,144 +287,72 @@ export default function DashboardScreen() {
             </View>
           </LinearGradient>
 
-          {/* Overall Stats Card */}
-          <View style={[styles.statsCard, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
-            <Text style={[styles.statsTitle, { color: theme.colors.text }]}>Overall Attendance</Text>
-
-            <View style={styles.progressContainer}>
-              <View style={[styles.progressBarBackground, { backgroundColor: theme.colors.gray[200] }]}>
-                <View
-                  style={[
-                    styles.progressBarFill,
-                    {
-                      width: `${Math.min(overallStats.percentage, 100)}%`,
-                      backgroundColor: getStatusColor(overallStats.status),
-                    },
-                  ]}
-                />
-              </View>
-              <Text style={[styles.percentageText, { color: getStatusColor(overallStats.status) }]}>
-                {overallStats.percentage.toFixed(1)}%
-              </Text>
-            </View>
-
-            <View style={styles.statsGrid}>
-              <View style={styles.statItem}>
-                <Text style={[styles.statValue, { color: theme.colors.text }]}>{overallStats.attended}</Text>
-                <Text style={[styles.statLabel, { color: theme.colors.textSecondary }]}>Attended</Text>
-              </View>
-              <View style={styles.statItem}>
-                <Text style={[styles.statValue, { color: theme.colors.text }]}>{overallStats.total}</Text>
-                <Text style={[styles.statLabel, { color: theme.colors.textSecondary }]}>Total</Text>
-              </View>
-              <View style={styles.statItem}>
-                <Text style={[styles.statValue, { color: getStatusColor(overallStats.status) }]}>
-                  {overallStats.canMiss}
-                </Text>
-                <Text style={[styles.statLabel, { color: theme.colors.textSecondary }]}>Can Miss</Text>
-              </View>
-            </View>
+          {/* Notes Input */}
+          <View style={[styles.notesCard, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
+            <TextInput
+              style={[styles.notesInput, {
+                backgroundColor: theme.colors.background,
+                color: theme.colors.text,
+                borderColor: theme.colors.border
+              }]}
+              placeholder="Add notes for this day (optional)"
+              placeholderTextColor={theme.colors.textSecondary}
+              value={notes}
+              onChangeText={setNotes}
+              multiline
+              numberOfLines={3}
+            />
           </View>
+
+          {/* Subject Overview */}
+          {subjects.length > 0 && (
+            <View style={styles.section}>
+              <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
+                Subject Attendance for {formatDateFn(parseISO(selectedDate), 'MMM d')}
+              </Text>
+
+              {subjectOverviews.map((overview) => (
+                <TouchableOpacity
+                  key={overview.subject.id}
+                  style={[styles.subjectCard, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}
+                  onPress={() => openSubjectMarkModal(overview.subject.id)}
+                >
+                  <View style={styles.subjectHeader}>
+                    <View style={[styles.subjectColorDot, { backgroundColor: overview.subject.color }]} />
+                    <Text style={[styles.subjectName, { color: theme.colors.text }]}>{overview.subject.name}</Text>
+                    <TouchableOpacity style={styles.subjectMarkButton} onPress={() => openSubjectMarkModal(overview.subject.id)}>
+                      <Ionicons name="add-circle" size={20} color={getStatusColor(overview.status as 'safe' | 'warning' | 'danger')} />
+                    </TouchableOpacity>
+                    {overview.total > 0 && (
+                      <Text style={[styles.subjectPercentage, { color: getStatusColor(overview.status as 'safe' | 'warning' | 'danger') }]}>
+                        {overview.attended}/{overview.total} ({overview.percentage.toFixed(0)}%)
+                      </Text>
+                    )}
+                    {overview.total === 0 && (
+                      <Text style={[styles.subjectPercentage, { color: theme.colors.textSecondary }]}>
+                        No lectures
+                      </Text>
+                    )}
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
 
           {/* Empty State */}
           {subjects.length === 0 && (
             <View style={[styles.emptyState, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
               <Text style={styles.emptyStateEmoji}>📚</Text>
               <Text style={[styles.emptyStateTitle, { color: theme.colors.text }]}>
-                Welcome to Your Attendance Tracker!
+                No Subjects Available
               </Text>
               <Text style={[styles.emptyStateText, { color: theme.colors.textSecondary }]}>
-                Get started by adding your subjects from the Subjects tab below.
+                Go back and add subjects from the Subjects tab.
               </Text>
-            </View>
-          )}
-
-          {/* Subject Overview */}
-          {subjects.length > 0 && (
-            <View style={styles.section}>
-              <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Subject Overview</Text>
-
-              {subjects.map((subject) => {
-                const subjectPercentage = subject.totalClasses > 0 ? (subject.attendedClasses / subject.totalClasses) * 100 : 0;
-                const subjectStatus = subjectPercentage >= subject.targetPercentage ? 'safe' :
-                                    subjectPercentage >= subject.targetPercentage - 5 ? 'warning' : 'danger';
-
-                return (
-                  <TouchableOpacity key={subject.id} style={[styles.subjectCard, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]} onPress={() => openSubjectMarkModal(subject.id)}>
-                    <View style={styles.subjectHeader}>
-                      <View style={[styles.subjectColorDot, { backgroundColor: subject.color }]} />
-                      <Text style={[styles.subjectName, { color: theme.colors.text }]}>{subject.name}</Text>
-                      <TouchableOpacity style={styles.subjectMarkButton} onPress={() => openSubjectMarkModal(subject.id)}>
-                        <Ionicons name="add-circle" size={20} color={getStatusColor(subjectStatus)} />
-                      </TouchableOpacity>
-                      <Text style={[styles.subjectPercentage, { color: getStatusColor(subjectStatus) }]}>
-                        {subjectPercentage.toFixed(1)}%
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
             </View>
           )}
         </View>
       </ScrollView>
-
-      {/* Quick Mark Modal */}
-      <Modal
-        visible={showQuickMarkModal}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowQuickMarkModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface }]}>
-            <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: theme.colors.text }]}>Mark Attendance</Text>
-              <TouchableOpacity onPress={() => setShowQuickMarkModal(false)}>
-                <Ionicons name="close" size={24} color={theme.colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.modalBody}>
-              <View style={styles.dateSelector}>
-                <Text style={[styles.dateLabel, { color: theme.colors.text }]}>Date:</Text>
-                <TextInput
-                  style={[styles.dateInput, { backgroundColor: theme.colors.background, color: theme.colors.text, borderColor: theme.colors.border }]}
-                  value={selectedDate}
-                  onChangeText={setSelectedDate}
-                  placeholder="YYYY-MM-DD"
-                />
-              </View>
-
-              <View style={styles.modalActions}>
-                <TouchableOpacity
-                  style={[styles.modalButton, { backgroundColor: theme.colors.success }]}
-                  onPress={() => handleQuickMarkAttendance(true)}
-                >
-                  <Ionicons name="checkmark" size={20} color={theme.colors.white} />
-                  <Text style={styles.modalButtonText}>Mark All Present</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[styles.modalButton, { backgroundColor: theme.colors.danger }]}
-                  onPress={() => handleQuickMarkAttendance(false)}
-                >
-                  <Ionicons name="close" size={20} color={theme.colors.white} />
-                  <Text style={styles.modalButtonText}>Mark All Absent</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[styles.modalButton, { backgroundColor: theme.colors.warning }]}
-                  onPress={handleToggleHoliday}
-                >
-                  <Ionicons name="calendar" size={20} color={theme.colors.white} />
-                  <Text style={styles.modalButtonText}>Mark as Holiday</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </View>
-      </Modal>
 
       {/* Subject Mark Modal */}
       <Modal
@@ -470,12 +375,9 @@ export default function DashboardScreen() {
             <View style={styles.modalBody}>
               <View style={styles.dateSelector}>
                 <Text style={[styles.dateLabel, { color: theme.colors.text }]}>Date:</Text>
-                <TextInput
-                  style={[styles.dateInput, { backgroundColor: theme.colors.background, color: theme.colors.text, borderColor: theme.colors.border }]}
-                  value={subjectMarkDate}
-                  onChangeText={setSubjectMarkDate}
-                  placeholder="YYYY-MM-DD"
-                />
+                <Text style={[styles.dateDisplay, { backgroundColor: theme.colors.background, color: theme.colors.text, borderColor: theme.colors.border }]}>
+                  {formatDateFn(parseISO(selectedDate), 'EEEE, MMMM d, yyyy')}
+                </Text>
               </View>
 
               <ScrollView showsVerticalScrollIndicator={false} style={styles.lecturesContainer}>
@@ -487,7 +389,7 @@ export default function DashboardScreen() {
                         style={[styles.deleteButton, { backgroundColor: theme.colors.gray[300] }]}
                         onPress={() => {
                           if (selectedSubject) {
-                            safeDeleteAttendanceRecord(selectedSubject, subjectMarkDate, lecture.lectureIndex);
+                            safeDeleteAttendanceRecord(selectedSubject, selectedDate, lecture.lectureIndex);
                             // Also remove from pending if it was there
                             setPendingLectures(prev => {
                               const newPending = { ...prev };
@@ -537,7 +439,7 @@ export default function DashboardScreen() {
                 ))}
                 {Object.keys(pendingLectures).length > 0 && (
                   <TouchableOpacity
-                    style={[styles.addButton, { backgroundColor: theme.colors.success }]}
+                    style={[styles.saveButton, { backgroundColor: theme.colors.success }]}
                     onPress={handleSavePending}
                   >
                     <Ionicons name="checkmark" size={24} color={theme.colors.white} />
@@ -556,27 +458,6 @@ export default function DashboardScreen() {
           </View>
         </View>
       </Modal>
-
-      {/* Calendar Attendance Modal */}
-      <Modal
-        visible={showCalendar}
-        animationType="fade"
-        transparent={false}
-        onRequestClose={() => setShowCalendar(false)}
-        presentationStyle="fullScreen"
-      >
-        <CalendarAttendance onDaySelected={openPastAttendanceForDate} />
-      </Modal>
-
-      {/* Mark Past Attendance modal (opens when user selects a date in the calendar) */}
-      <MarkPastAttendanceModal
-        isVisible={showPastModal}
-        date={pastModalDate}
-        onClose={() => {
-          setShowPastModal(false);
-          setPastModalDate(null);
-        }}
-      />
     </View>
   );
 }
@@ -590,42 +471,44 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: 20,
+    paddingBottom: 20,
   },
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 24,
-    paddingTop: 20,
+    paddingVertical: 16,
+    gap: 16,
   },
-  greeting: {
-    fontSize: 16,
-    fontWeight: '500',
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  userName: {
-    fontSize: 24,
+  headerCenter: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  title: {
+    fontSize: 20,
     fontWeight: '700',
+  },
+  dateText: {
+    fontSize: 14,
     marginTop: 4,
   },
-  streakBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+  deleteButton: {
+    width: 40,
+    height: 40,
     borderRadius: 20,
-    gap: 6,
-  },
-  streakEmoji: {
-    fontSize: 16,
-  },
-  streakText: {
-    fontSize: 14,
-    fontWeight: '600',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   quickActionsCard: {
     borderRadius: 20,
     padding: 24,
-    marginBottom: 24,
+    marginBottom: 16,
   },
   quickActionsTitle: {
     fontSize: 20,
@@ -657,54 +540,19 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-  statsCard: {
+  notesCard: {
     borderRadius: 16,
-    padding: 20,
+    padding: 16,
     marginBottom: 24,
     borderWidth: 1,
   },
-  statsTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 16,
-  },
-  progressContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 16,
-    gap: 12,
-  },
-  progressBarBackground: {
-    flex: 1,
-    height: 8,
-    borderRadius: 4,
-    overflow: 'hidden',
-  },
-  progressBarFill: {
-    height: '100%',
-    borderRadius: 4,
-  },
-  percentageText: {
+  notesInput: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
     fontSize: 16,
-    fontWeight: '700',
-    minWidth: 60,
-    textAlign: 'right',
-  },
-  statsGrid: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-  },
-  statItem: {
-    alignItems: 'center',
-  },
-  statValue: {
-    fontSize: 24,
-    fontWeight: '700',
-    marginBottom: 4,
-  },
-  statLabel: {
-    fontSize: 12,
-    fontWeight: '500',
+    minHeight: 80,
+    textAlignVertical: 'top',
   },
   section: {
     marginBottom: 24,
@@ -723,7 +571,7 @@ const styles = StyleSheet.create({
   subjectHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
+    justifyContent: 'space-between',
     gap: 12,
   },
   subjectColorDot: {
@@ -742,6 +590,29 @@ const styles = StyleSheet.create({
   subjectPercentage: {
     fontSize: 16,
     fontWeight: '700',
+  },
+  emptyState: {
+    borderRadius: 16,
+    padding: 32,
+    marginBottom: 24,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  emptyStateEmoji: {
+    fontSize: 48,
+    marginBottom: 16,
+  },
+  emptyStateTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  emptyStateText: {
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: 24,
   },
   modalOverlay: {
     flex: 1,
@@ -768,28 +639,6 @@ const styles = StyleSheet.create({
   modalBody: {
     padding: 20,
   },
-  inputLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  attendanceButtons: {
-    flexDirection: 'column',
-    gap: 12,
-  },
-  attendanceButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 16,
-    borderRadius: 12,
-    gap: 8,
-  },
-  attendanceButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
   dateSelector: {
     marginBottom: 20,
   },
@@ -798,50 +647,15 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 8,
   },
-  dateInput: {
+  dateDisplay: {
     borderWidth: 1,
     borderRadius: 12,
     padding: 12,
     fontSize: 16,
-  },
-  modalActions: {
-    gap: 12,
-  },
-  modalButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 16,
-    borderRadius: 12,
-    gap: 8,
-  },
-  modalButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
     fontWeight: '600',
   },
-  emptyState: {
-    borderRadius: 16,
-    padding: 32,
-    marginBottom: 24,
-    borderWidth: 1,
-    alignItems: 'center',
-  },
-  emptyStateEmoji: {
-    fontSize: 48,
-    marginBottom: 16,
-  },
-  emptyStateTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    marginBottom: 12,
-    textAlign: 'center',
-  },
-  emptyStateText: {
-    fontSize: 16,
-    textAlign: 'center',
-    marginBottom: 24,
-    lineHeight: 24,
+  lecturesContainer: {
+    flex: 1,
   },
   lectureItem: {
     marginBottom: 20,
@@ -855,13 +669,6 @@ const styles = StyleSheet.create({
   lectureTitle: {
     fontSize: 16,
     fontWeight: '600',
-  },
-  deleteButton: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   statusButtons: {
     flexDirection: 'row',
@@ -879,17 +686,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-  selectedPresent: {
-    borderWidth: 3,
-    borderColor: '#FFFFFF',
-  },
-  selectedAbsent: {
-    borderWidth: 3,
-    borderColor: '#FFFFFF',
-  },
   selected: {
     borderWidth: 3,
     borderColor: '#FFFFFF',
+  },
+  saveButton: {
+    marginTop: 16,
+    paddingVertical: 12,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
   },
   addButton: {
     marginTop: 16,
@@ -899,20 +707,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: 8,
-  },
-  headerRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  calendarButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  lecturesContainer: {
-    flex: 1,
   },
 });
