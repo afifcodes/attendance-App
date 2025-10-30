@@ -11,6 +11,7 @@ import {
   migrateLocalToCloud,
   listAllAttendanceDays,
 } from '@/services/firestore';
+import useToast from '@/utils/useToast';
 
 const STORAGE_KEYS = {
   SUBJECTS: '@attendance_subjects',
@@ -81,9 +82,18 @@ const AttendanceProviderInner = () => {
       }
 
       const newSubjects = Object.values(subjectMap) as Subject[];
-      // Save locally so AttendanceContext loads them normally
-      if (newSubjects.length > 0) await saveSubjects(newSubjects);
-      if (newRecords.length > 0) await saveRecords(newRecords);
+      // Reverse rehydration guard: if local data exists, don't overwrite it with cloud data
+      const localRecordsExist = await AsyncStorage.getItem(STORAGE_KEYS.RECORDS);
+      const localSubjectsExist = await AsyncStorage.getItem(STORAGE_KEYS.SUBJECTS);
+      if (localRecordsExist || localSubjectsExist) {
+        // Keep local data to avoid accidental overwrite
+        toast.show('Local attendance data detected — retained local copy. Cloud data was not applied to avoid overwrite.', 'info', 4000);
+      } else {
+        // Save locally so AttendanceContext loads them normally
+        if (newSubjects.length > 0) await saveSubjects(newSubjects);
+        if (newRecords.length > 0) await saveRecords(newRecords);
+        toast.show('Attendance data loaded from cloud', 'success', 2500);
+      }
     } catch (err) {
       console.error('Error handling user login sync:', err);
     }
@@ -179,6 +189,8 @@ const AttendanceProviderInner = () => {
     }
   }, []);
 
+  const toast = useToast();
+
   // Helper: build DayEntry[] from current records for a date and send to Firestore
   const syncDayToCloud = useCallback(async (date: string) => {
     try {
@@ -204,7 +216,14 @@ const AttendanceProviderInner = () => {
       }));
 
       if (entries.length > 0) {
-        await saveDayAttendanceToCloud(uid, date, entries as any);
+        try {
+          await saveDayAttendanceToCloud(uid, date, entries as any);
+          // show a small success toast
+          toast.show(`Synced ${date} to cloud`, 'success', 2000);
+        } catch (err) {
+          console.error('Error saving day to cloud:', err);
+          toast.show('Failed to sync to cloud', 'error', 3000);
+        }
       }
     } catch (err) {
       console.error('Error syncing day to cloud:', err);
