@@ -4,6 +4,13 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import type { Subject, AttendanceRecord, DayRecord, AttendanceStats, LectureEntry } from '@/types/Attendance';
 import { useLoading } from './LoadingContext';
 import { handleError, createAsyncHandler } from '@/utils/errorHandler';
+import { authService } from '@/services/auth';
+import {
+  saveDayAttendanceToCloud,
+  getDayAttendanceFromCloud,
+  migrateLocalToCloud,
+  listAllAttendanceDays,
+} from '@/services/firestore';
 
 const STORAGE_KEYS = {
   SUBJECTS: '@attendance_subjects',
@@ -39,6 +46,119 @@ const AttendanceProviderInner = () => {
         setSubjects(subjectsList);
       }
       if (recordsData) {
+
+  // Handle actions when a user logs in: migrate local data and hydrate from cloud
+  const handleUserLogin = useCallback(async (uid: string) => {
+    try {
+      // If local records exist, migrate them to cloud first
+      const recordsData = await AsyncStorage.getItem(STORAGE_KEYS.RECORDS);
+      if (recordsData) {
+        try {
+          const recordsList = JSON.parse(recordsData) as Array<any>;
+
+          // Build map date -> entries as used by migrateLocalToCloud
+          const dateMap: Record<string, Array<any>> = {};
+          const subjectsData = await AsyncStorage.getItem(STORAGE_KEYS.SUBJECTS);
+          const subjectsList = subjectsData ? JSON.parse(subjectsData) as Array<any> : [];
+
+          recordsList.forEach((r: any) => {
+            const date = r.date;
+            const subjectId = r.subjectId || r.subject || 'unknown';
+            dateMap[date] = dateMap[date] || [];
+          });
+
+          // For each date, reconstruct entries from recordsList
+          for (const date of Object.keys(dateMap)) {
+            const rows = recordsList.filter(r => r.date === date && r.status !== 'no-lecture');
+            const map: Record<string, { lectures: number; attended: number }> = {};
+            rows.forEach((r: any) => {
+              const sid = r.subjectId || r.subject || 'unknown';
+              if (!map[sid]) map[sid] = { lectures: 0, attended: 0 };
+              if ((r.lectureIndex || 1) > map[sid].lectures) map[sid].lectures = r.lectureIndex || 1;
+              if (r.status === 'present') map[sid].attended += 1;
+            });
+
+            dateMap[date] = Object.entries(map).map(([sid, counts]) => ({
+              subject: subjectsList.find((s: any) => s.id === sid)?.name || sid,
+              subjectId: sid,
+              lectures: counts.lectures,
+              attended: counts.attended,
+            }));
+          }
+
+          if (Object.keys(dateMap).length > 0) {
+            await migrateLocalToCloud(uid, dateMap);
+            // Clear local cache after successful migration
+            await Promise.all([
+              AsyncStorage.removeItem(STORAGE_KEYS.RECORDS),
+              AsyncStorage.removeItem(STORAGE_KEYS.DAYS),
+              AsyncStorage.removeItem(STORAGE_KEYS.SUBJECTS),
+            ]);
+          }
+        } catch (migrationErr) {
+          console.error('Error migrating local records on login:', migrationErr);
+        }
+      }
+
+      // Hydrate app state from cloud: list all attendance days and reconstruct records/subjects
+      const docs = await listAllAttendanceDays(uid);
+      const newRecords: AttendanceRecord[] = [];
+      const subjectMap: Record<string, any> = {};
+
+      for (const doc of docs) {
+        const date = doc.id;
+        const data = doc.entries as Array<any>;
+        if (!Array.isArray(data)) continue;
+        for (const e of data) {
+          const sid = e.subjectId || e.subject || String(e.subject);
+          subjectMap[sid] = subjectMap[sid] || { id: sid, name: e.subject || sid, color: '#888', totalClasses: 0, attendedClasses: 0, targetPercentage: 75, createdAt: new Date().toISOString() };
+          const lectures = e.lectures || 0;
+          const attended = e.attended || 0;
+          for (let i = 1; i <= lectures; i++) {
+            const status: 'present' | 'absent' = i <= attended ? 'present' : 'absent';
+            newRecords.push({
+              id: `${date}-${sid}-${i}`,
+              subjectId: sid,
+              date,
+              lectureIndex: i,
+              status,
+            });
+          }
+          // update subject counters
+          subjectMap[sid].totalClasses += lectures;
+          subjectMap[sid].attendedClasses += attended;
+        }
+      }
+
+      const newSubjects = Object.values(subjectMap) as Subject[];
+      // Save locally so AttendanceContext loads them normally
+      if (newSubjects.length > 0) await saveSubjects(newSubjects);
+      if (newRecords.length > 0) await saveRecords(newRecords);
+    } catch (err) {
+      console.error('Error handling user login sync:', err);
+    }
+  }, [saveSubjects, saveRecords]);
+
+  // Subscribe to auth state changes to handle login/logout sync
+  useEffect(() => {
+    const unsubscribe = authService.onAuthStateChanged(async (user) => {
+      try {
+        if (user) {
+          // On login: migrate local -> cloud if local data exists, then hydrate from cloud
+          await handleUserLogin(user.uid);
+        } else {
+          // On logout: clear local cache but keep cloud data
+          await clearLocalCache();
+        }
+      } catch (e) {
+        console.error('Auth state handler error:', e);
+      }
+    });
+
+    return () => {
+      unsubscribe && unsubscribe();
+    };
+  }, [handleUserLogin, clearLocalCache]);
         const recordsList = JSON.parse(recordsData);
         // Migrate old records with attended boolean to status and lectureIndex
         const migratedRecords = recordsList.map((r: any) => {
@@ -89,6 +209,57 @@ const AttendanceProviderInner = () => {
       console.error('Error saving days:', error);
     }
   };
+
+  // Helper: clear AsyncStorage local cache and reset in-memory state
+  const clearLocalCache = useCallback(async () => {
+    try {
+      await Promise.all([
+        AsyncStorage.removeItem(STORAGE_KEYS.SUBJECTS),
+        AsyncStorage.removeItem(STORAGE_KEYS.RECORDS),
+        AsyncStorage.removeItem(STORAGE_KEYS.DAYS),
+        AsyncStorage.removeItem(STORAGE_KEYS.TARGET),
+      ]);
+    } catch (err) {
+      console.error('Error clearing local cache:', err);
+    } finally {
+      setSubjects([]);
+      setRecords([]);
+      setDays([]);
+      setTargetPercentage(75);
+    }
+  }, []);
+
+  // Helper: build DayEntry[] from current records for a date and send to Firestore
+  const syncDayToCloud = useCallback(async (date: string) => {
+    try {
+      const currentUser = authService.getCurrentUser();
+      const uid = currentUser?.uid;
+      if (!uid) return;
+
+      // Build map subjectId -> { lectures, attended, subjectName }
+      const rows = records.filter(r => r.date === date && r.status !== 'no-lecture');
+      const map: Record<string, { lectures: number; attended: number; subjectName?: string }> = {};
+      rows.forEach(r => {
+        const id = r.subjectId;
+        if (!map[id]) map[id] = { lectures: 0, attended: 0, subjectName: '' };
+        if (r.lectureIndex > map[id].lectures) map[id].lectures = r.lectureIndex;
+        if (r.status === 'present') map[id].attended += 1;
+      });
+
+      const entries = Object.entries(map).map(([subjectId, v]) => ({
+        subject: subjects.find(s => s.id === subjectId)?.name || v.subjectName || subjectId,
+        subjectId,
+        lectures: v.lectures,
+        attended: v.attended,
+      }));
+
+      if (entries.length > 0) {
+        await saveDayAttendanceToCloud(uid, date, entries as any);
+      }
+    } catch (err) {
+      console.error('Error syncing day to cloud:', err);
+    }
+  }, [records, subjects]);
 
   const addSubject = useCallback((name: string, color: string, targetPercentage: number = 75) => {
     const newSubject: Subject = {
