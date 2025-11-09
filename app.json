@@ -32,19 +32,14 @@
     },
     "plugins": [
       [
-        "expo-router",
-        {
-          "origin": "https://rork.com/"
-        }
-      ]
+        "expo-router"
+      ],
+      "expo-sqlite"
     ],
-  "experiments": {
-    "typedRoutes": false
-  },
+    "experiments": {
+      "typedRoutes": false
+    },
     "extra": {
-      "router": {
-        "origin": "https://rork.com/"
-      },
       "eas": {
         "projectId": "1d0bf8ee-dd9d-4f4c-8ce8-732639972c5b"
       }
