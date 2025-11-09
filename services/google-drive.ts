@@ -1,4 +1,4 @@
-import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import { GoogleSignin } from './google-signin-wrapper';
 import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -38,6 +38,11 @@ class GoogleDriveService {
   async configure(): Promise<void> {
     if (this.isConfigured) return;
 
+    if (!GoogleSignin) {
+      console.warn('Google Sign-In is not available. Drive configuration skipped.');
+      return;
+    }
+
     GoogleSignin.configure({
       scopes: ['https://www.googleapis.com/auth/drive.file'], // Drive scope for file operations
       webClientId: '744937657357-vgj5p2upoj7n3huvqa7ftmgda2ujtvuk.apps.googleusercontent.com',
@@ -52,6 +57,9 @@ class GoogleDriveService {
   async signIn(): Promise<boolean> {
     try {
       await this.configure();
+      if (!GoogleSignin) {
+        throw new Error('Google Sign-In is not available.');
+      }
       await GoogleSignin.hasPlayServices();
       await GoogleSignin.signIn();
       console.log('Successfully signed in with Google');
@@ -65,7 +73,9 @@ class GoogleDriveService {
   // Sign out from Google
   async signOut(): Promise<void> {
     try {
-      await GoogleSignin.signOut();
+      if (GoogleSignin) {
+        await GoogleSignin.signOut();
+      }
       this.folderId = null;
       console.log('Signed out from Google');
     } catch (error) {
@@ -76,6 +86,7 @@ class GoogleDriveService {
   // Get access token
   private async getAccessToken(): Promise<string | null> {
     try {
+      if (!GoogleSignin) return null;
       const { accessToken } = await GoogleSignin.getTokens();
       return accessToken;
     } catch (error) {
@@ -87,6 +98,7 @@ class GoogleDriveService {
   // Check if signed in
   async isSignedIn(): Promise<boolean> {
     try {
+      if (!GoogleSignin) return false;
       const user = await GoogleSignin.getCurrentUser();
       return !!user;
     } catch (error) {

@@ -1,4 +1,4 @@
-import { initializeApp, FirebaseApp } from 'firebase/app';
+import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, Auth } from 'firebase/auth';
 import { getFirestore, Firestore } from 'firebase/firestore';
 
@@ -17,14 +17,31 @@ export let auth: Auth | null = null;
 export let db: Firestore | null = null;
 export let googleProvider: GoogleAuthProvider | null = null;
 
-// Initialize Firebase only in a browser environment (or non-SSR environment)
-if (typeof window !== 'undefined') {
-  app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
-  db = getFirestore(app);
-  googleProvider = new GoogleAuthProvider();
-  googleProvider.addScope('email');
-  googleProvider.addScope('profile');
+// Initialize Firebase once. This supports both web and React Native environments.
+if (getApps().length === 0) {
+  try {
+    app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    db = getFirestore(app);
+    googleProvider = new GoogleAuthProvider();
+    googleProvider.addScope('email');
+    googleProvider.addScope('profile');
+  } catch (err) {
+    // If initialization fails for any reason, log and continue. Consumers will throw if auth/db are required.
+    console.warn('Firebase initialization warning:', err);
+  }
+} else {
+  // If an app already exists, reuse it
+  app = getApps()[0] as FirebaseApp;
+  try {
+    auth = getAuth(app);
+    db = getFirestore(app);
+    googleProvider = new GoogleAuthProvider();
+    googleProvider.addScope('email');
+    googleProvider.addScope('profile');
+  } catch (err) {
+    console.warn('Firebase reuse warning:', err);
+  }
 }
 
 export default app;

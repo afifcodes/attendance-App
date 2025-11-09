@@ -29,7 +29,7 @@ export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
   const { theme } = useTheme();
   const router = useRouter();
-  const [profile, setProfile] = useState(null);
+  const [profile, setProfile] = useState(profileService.getCurrentProfile());
   const [showQuickMarkModal, setShowQuickMarkModal] = useState(false);
   const [showSubjectMarkModal, setShowSubjectMarkModal] = useState(false);
   const [selectedSubject, setSelectedSubject] = useState<string | null>(null);
@@ -47,7 +47,7 @@ export default function DashboardScreen() {
 
   
 
-  const { subjects, records, getOverallStats, markAllAttendance, toggleHoliday, updateDayNotes, markAttendance, deleteLecture } = useAttendance();
+  const { subjects, records, getOverallStats, markAllAttendance, toggleHoliday, updateDayNotes, markAttendance, deleteLecture, activePeriodId } = useAttendance();
 
   // Safe delete helper: use context deleteLecture if available,
   // otherwise fall back to marking the lecture as 'no-lecture' so it's ignored in calculations.
@@ -102,31 +102,38 @@ export default function DashboardScreen() {
   }, [router]);
 
   useEffect(() => {
-    // Initialize profile if user is authenticated
-    const initializeUser = async () => {
-      const currentUser = await authService.getCurrentUser();
-      if (currentUser && !profile) {
-        profileService.initializeProfile(
-          currentUser.uid,
-          currentUser.email || '',
-          currentUser.displayName || 'User'
-        );
+    // Subscribe to profile changes
+    const unsubscribe = profileService.subscribe((newProfile) => {
+      setProfile(newProfile);
+      if (newProfile) {
+        setUserName(newProfile.displayName || 'Student');
+      } else {
+        setUserName('Student');
       }
+    });
 
-      // Get current profile data to get user name
-      const currentProfile = profileService.getCurrentProfile();
-      if (currentProfile) {
-        setUserName(currentProfile.displayName || 'Student');
-      }
+    // Also check if a profile exists on mount (in case subscription is slow)
+    const currentProfile = profileService.getCurrentProfile();
+    if (currentProfile) {
+      setProfile(currentProfile);
+      setUserName(currentProfile.displayName || 'Student');
+    }
+
+    return () => {
+      unsubscribe();
     };
-
-    initializeUser();
   }, []);
 
   const handleQuickMarkAttendance = async (attended: boolean, date?: string) => {
     console.log('handleQuickMarkAttendance called with attended:', attended, 'date:', date);
     if (Platform.OS !== 'web') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }
+
+    if (!profile) {
+      Alert.alert('Error', 'Profile is not initialized. Please wait a moment or ensure you are logged in.');
+      console.error('Error marking attendance: Profile not initialized');
+      return;
     }
 
     const markDate = date || selectedDate;
@@ -192,14 +199,8 @@ export default function DashboardScreen() {
       if (Platform.OS !== 'web') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
-      // After adding lecture, immediately mark it as present in pending state
-      setTimeout(() => {
-        const lecturesAfter = records.filter(r => r.subjectId === selectedSubject && r.date === subjectMarkDate).sort((a, b) => a.lectureIndex - b.lectureIndex);
-        const newLecture = lecturesAfter[lecturesAfter.length - 1]; // Get the last added lecture
-        if (newLecture) {
-          setPendingLectures(prev => ({ ...prev, [newLecture.lectureIndex]: 'present' }));
-        }
-      }, 100); // Small delay to ensure the record is added
+      // The new lecture will appear in the 'lectures' array on the next render
+      // due to the markAttendance call updating the global 'records' state.
     }
   };
 
@@ -240,6 +241,16 @@ export default function DashboardScreen() {
 
   const overallStats = getOverallStats();
 
+  const activePeriodLabel = useMemo(() => {
+    if (!activePeriodId) return null;
+    try {
+      const d = new Date(`${activePeriodId}-01`);
+      return formatDateFn(d, 'LLLL yyyy');
+    } catch (e) {
+      return activePeriodId;
+    }
+  }, [activePeriodId]);
+
   const lectures = useMemo(() => records.filter(r => r.subjectId === selectedSubject && r.date === subjectMarkDate).sort((a, b) => a.lectureIndex - b.lectureIndex), [records, selectedSubject, subjectMarkDate]);
 
   return (
@@ -257,7 +268,10 @@ export default function DashboardScreen() {
                 {userName !== 'Student' ? `${getGreeting()}, ${userName}!` : 'Good Evening, Student!'}
               </Text>
             </View>
-            <View style={styles.headerRight}>
+              <View style={styles.headerRight}>
+                {activePeriodLabel && (
+                  <Text style={[styles.activePeriod, { color: theme.colors.textSecondary }]}>{`Active Period: ${activePeriodLabel}`}</Text>
+                )}
               <TouchableOpacity
                   style={[styles.calendarButton, {
                     backgroundColor: theme.colors.primary,
@@ -277,6 +291,7 @@ export default function DashboardScreen() {
                   <Ionicons name="calendar-outline" size={20} color={theme.colors.white} />
                 </TouchableOpacity>
             </View>
+            
           </View>
 
           {/* Quick Actions Card */}
@@ -535,6 +550,8 @@ export default function DashboardScreen() {
                     </View>
                   </View>
                 ))}
+              </ScrollView>
+              <View style={styles.modalActionsBottom}>
                 {Object.keys(pendingLectures).length > 0 && (
                   <TouchableOpacity
                     style={[styles.addButton, { backgroundColor: theme.colors.success }]}
@@ -551,7 +568,7 @@ export default function DashboardScreen() {
                   <Ionicons name="add" size={24} color={theme.colors.white} />
                   <Text style={[styles.buttonText]}>Add Lecture</Text>
                 </TouchableOpacity>
-              </ScrollView>
+              </View>
             </View>
           </View>
         </View>
@@ -766,6 +783,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   modalBody: {
+    flex: 1,
     padding: 20,
   },
   inputLabel: {
@@ -905,6 +923,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
+  activePeriod: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginRight: 8,
+  },
   calendarButton: {
     width: 40,
     height: 40,
@@ -914,5 +937,9 @@ const styles = StyleSheet.create({
   },
   lecturesContainer: {
     flex: 1,
+  },
+  modalActionsBottom: {
+    marginTop: 16,
+    gap: 12,
   },
 });

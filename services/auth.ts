@@ -5,13 +5,14 @@ import {
   signOut as firebaseSignOut,
   onAuthStateChanged as firebaseOnAuthStateChanged,
   signInWithCredential,
-  signInWithPopup,
   GoogleAuthProvider,
   User,
   updateProfile
 } from 'firebase/auth';
-import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
+import { GoogleSignin, statusCodes } from './google-signin-wrapper';
 import { auth, googleProvider } from './firebase';
+import { Platform } from 'react-native';
+import { profileService } from './profile';
 
 export interface AuthUser {
   uid: string;
@@ -22,10 +23,34 @@ export interface AuthUser {
 
 class AuthService {
   constructor() {
-    // Configure Google Sign-In
-    GoogleSignin.configure({
-      webClientId: '744937657357-vgj5p2upoj7n3huvqa7ftmgda2ujtvuk.apps.googleusercontent.com',
-      offlineAccess: true,
+    // Configure Google Sign-In on native platforms only
+    try {
+      if (GoogleSignin) {
+        GoogleSignin.configure({
+          webClientId: '744937657357-vgj5p2upoj7n3huvqa7ftmgda2ujtvuk.apps.googleusercontent.com',
+          offlineAccess: true,
+        });
+      } else {
+        console.warn('Google Sign-In is not available. Configuration skipped.');
+      }
+    } catch (err) {
+      console.warn('GoogleSignin configure failed or running on unsupported platform:', err);
+    }
+
+    // Initialize profile on auth state change
+    firebaseOnAuthStateChanged(this.getAuthOrThrow(), async (user) => {
+      if (user) {
+        try {
+          await profileService.initializeProfile(
+            user.uid,
+            user.email || 'unknown@example.com',
+            user.displayName || 'User'
+          );
+          console.log('Profile initialized for user:', user.uid);
+        } catch (e) {
+          console.error('Failed to initialize profile on auth state change:', e);
+        }
+      }
     });
   }
 
@@ -62,10 +87,9 @@ class AuthService {
   // Sign in with Google
   async signInWithGoogle(): Promise<AuthUser> {
     try {
-      // If running in a browser (web), use Firebase's popup OAuth flow
-      if (typeof window !== 'undefined' && googleProvider && auth) {
-        const userCredential = await signInWithPopup(auth, googleProvider);
-        return this.mapFirebaseUser(userCredential.user);
+      // Ensure Google Sign-In is available
+      if (!GoogleSignin || !statusCodes) {
+        throw new Error('Google Sign-In is not available on this platform/environment.');
       }
 
       // Ensure Google Play Services are available (and prompt to update if needed)
@@ -74,34 +98,37 @@ class AuthService {
       // Sign in with Google (native)
       const signInResult = await GoogleSignin.signIn();
       const idToken = (signInResult as any)?.idToken;
+      const accessToken = (signInResult as any)?.accessToken;
 
-      if (!idToken) {
-        throw new Error('Missing Google ID token');
+      if (!idToken && !accessToken) {
+        throw new Error('Missing Google ID token and access token');
       }
 
-      // Create Firebase credential
-      const googleCredential = GoogleAuthProvider.credential(idToken);
+      // Create Firebase credential (idToken preferred; include accessToken when available)
+      const googleCredential = GoogleAuthProvider.credential(idToken || undefined, accessToken || undefined);
 
       // Sign in to Firebase with the credential
-  const activeAuth = this.getAuthOrThrow();
-  const userCredential = await signInWithCredential(activeAuth, googleCredential);
+      const activeAuth = this.getAuthOrThrow();
+      const userCredential = await signInWithCredential(activeAuth, googleCredential);
 
       return this.mapFirebaseUser(userCredential.user);
     } catch (error: any) {
       console.error('Error signing in with Google:', error);
 
       // Handle specific Google Sign-In errors
-      if (error.code === statusCodes.SIGN_IN_CANCELLED) {
-        throw new Error('Google Sign-In was cancelled');
-      } else if (error.code === statusCodes.IN_PROGRESS) {
-        throw new Error('Google Sign-In is already in progress');
-      } else if (error.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
-        throw new Error('Google Play Services are not available');
-      } else {
-        // Firebase or general error
-        const message = error.message || 'Failed to sign in with Google';
-        throw new Error(message);
+      if (statusCodes) {
+        if (error.code === statusCodes.SIGN_IN_CANCELLED) {
+          throw new Error('Google Sign-In was cancelled');
+        } else if (error.code === statusCodes.IN_PROGRESS) {
+          throw new Error('Google Sign-In is already in progress');
+        } else if (error.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
+          throw new Error('Google Play Services are not available');
+        }
       }
+      
+      // Firebase or general error
+      const message = error.message || 'Failed to sign in with Google';
+      throw new Error(message);
     }
   }
 
@@ -113,7 +140,9 @@ class AuthService {
       console.log('Firebase sign out completed, clearing Google Sign-In...');
       // Also sign out from Google Sign-In if using Google auth
       try {
-        await GoogleSignin.signOut();
+        if (GoogleSignin) {
+          await GoogleSignin.signOut();
+        }
       } catch (googleError) {
         console.log('Google Sign-In sign out error (may not be signed in):', googleError);
       }

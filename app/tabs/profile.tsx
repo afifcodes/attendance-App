@@ -13,18 +13,29 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { profileService } from '@/services/profile';
 import { authService } from '@/services/auth';
-import { backupService } from '@/services/backup';
+import { /* backupService (removed) */ } from '@/services/backup';
+import { migrateLocalToCloud, listAllAttendanceDays, startNewPeriod, getActivePeriodId, fetchAttendanceForActivePeriod } from '@/services/firestore';
+import { useAttendance } from '@/contexts/AttendanceContext';
+import useToast from '@/utils/useToast';
+import { Modal, Button, ActivityIndicator } from 'react-native';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useLoading } from '@/contexts/LoadingContext';
 import { handleError, createAsyncHandler } from '@/utils/errorHandler';
 import { LoadingIndicator } from '@/components/LoadingIndicator';
 import type { UserProfile } from '@/types/User';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { theme, isDarkMode, toggleTheme } = useTheme();
   const { setLoading } = useLoading();
+  const toast = useToast();
+  const attendance = useAttendance();
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [resetConfirmText, setResetConfirmText] = useState('');
+  const [activePeriod, setActivePeriod] = useState<string | null>(null);
+  const [isResetting, setIsResetting] = useState(false);
   const [user, setUser] = useState<UserProfile | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState('');
@@ -34,6 +45,20 @@ export default function ProfileScreen() {
   useEffect(() => {
     const unsubscribe = profileService.subscribe(setUser);
     return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    // show active period if available
+    (async () => {
+      try {
+        const currentUser = authService.getCurrentUser();
+        if (!currentUser) return;
+        const pid = await getActivePeriodId(currentUser.uid);
+        setActivePeriod(pid);
+      } catch (err) {
+        // ignore
+      }
+    })();
   }, []);
 
   const handleEditToggle = useCallback(() => {
@@ -90,122 +115,224 @@ export default function ProfileScreen() {
 
   const handleBackupToDrive = async () => {
     try {
-      // Check if signed in to Google Drive
-      const isSignedIn = await backupService.isGoogleDriveSignedIn();
-      if (!isSignedIn) {
-        Alert.alert(
-          'Google Sign-In Required',
-          'You need to sign in with Google to backup to Drive. Would you like to sign in now?',
-          [
-            {
-              text: 'Cancel',
-              style: 'cancel',
-            },
-            {
-              text: 'Sign In',
-              onPress: async () => {
-                console.log('Attempting Google Sign-In...');
-                const signInSuccess = await backupService.signInToGoogleDrive();
-                console.log('Sign-in result:', signInSuccess);
-                if (signInSuccess) {
-                  console.log('Sign-in successful, retrying backup...');
-                  // Now try backup again
-                  handleBackupToDrive();
-                } else {
-                  Alert.alert('Error', 'Failed to sign in to Google Drive');
-                }
-              },
-            },
-          ],
-        );
+      const currentUser = authService.getCurrentUser();
+      if (!currentUser) {
+        Alert.alert('Sign in required', 'Please sign in with Google to enable cloud backup.');
         return;
       }
 
-      console.log('Starting backup to Google Drive...');
-      // Perform backup
-      const result = await backupService.backupToGoogleDrive();
-      console.log('Backup result:', result);
-
-      if (result.success) {
-        Alert.alert('Success', 'Your data has been successfully backed up to Google Drive!');
-      } else {
-        Alert.alert('Backup Failed', result.error || 'Failed to backup data to Google Drive');
+      // Build localRecords shape expected by migrateLocalToCloud: { date: DayEntry[] }
+      const recordsData = await AsyncStorage.getItem('@attendance_records');
+      const subjectsData = await AsyncStorage.getItem('@attendance_subjects');
+      if (!recordsData) {
+        Alert.alert('No local data', 'No local attendance found to backup');
+        return;
       }
-    } catch (error) {
-      console.error('Error backing up to Drive:', error);
-      Alert.alert('Error', 'An unexpected error occurred during backup');
+
+      const recordsList = JSON.parse(recordsData) as Array<any>;
+      const subjectsList = subjectsData ? JSON.parse(subjectsData) as Array<any> : [];
+
+      const dateMap: Record<string, Record<string, { lectures: number; attended: number }>> = {};
+      recordsList.forEach((r: any) => {
+        const date = r.date;
+        const sid = r.subjectId || r.subject || 'unknown';
+        dateMap[date] = dateMap[date] || {};
+        dateMap[date][sid] = dateMap[date][sid] || { lectures: 0, attended: 0 };
+        if ((r.lectureIndex || 1) > dateMap[date][sid].lectures) dateMap[date][sid].lectures = r.lectureIndex || 1;
+        if (r.status === 'present') dateMap[date][sid].attended += 1;
+      });
+
+      const localRecordsToMigrate: Record<string, Array<any>> = {};
+      for (const [date, subjectsMap] of Object.entries(dateMap)) {
+        localRecordsToMigrate[date] = Object.entries(subjectsMap).map(([subjectId, counts]) => ({
+          subject: subjectsList.find((s: any) => s.id === subjectId)?.name || subjectId,
+          subjectId,
+          lectures: counts.lectures,
+          attended: counts.attended,
+        }));
+      }
+
+  await migrateLocalToCloud(currentUser.uid, localRecordsToMigrate);
+  toast.show('Backup to Firestore completed', 'success');
+      Alert.alert('Success', 'Your attendance was backed up to your Firebase account.');
+    } catch (err) {
+      console.error('Error backing up to Firestore:', err);
+      Alert.alert('Backup failed', 'Failed to backup data to Firestore');
+    }
+  };
+
+  const handleConfirmReset = async () => {
+    try {
+      const currentUser = authService.getCurrentUser();
+      if (!currentUser) {
+        Alert.alert('Sign in required', 'Please sign in to reset attendance');
+        return;
+      }
+      setLoading('reset_period', true);
+      setResetConfirmText('');
+      setIsResetting(true);
+
+      console.log('reset: backing up local attendance keys');
+      // Backup local attendance keys
+      const allKeys = await AsyncStorage.getAllKeys();
+      const attendanceKeys = allKeys.filter(k => k.toLowerCase().includes('attendance'));
+      const backup: Record<string, string | null> = {};
+      for (const k of attendanceKeys) {
+        backup[k] = await AsyncStorage.getItem(k);
+      }
+
+      let newPeriodId: string | null = null;
+      try {
+        console.log('reset: creating new period');
+        newPeriodId = await startNewPeriod(currentUser.uid);
+        console.log('reset: created period', newPeriodId);
+      } catch (err) {
+        console.error('reset: failed creating period', err);
+        // restore nothing changed
+        toast.show(`Reset failed: ${String(err)}`, 'error');
+        setShowResetModal(false);
+        return;
+      }
+
+      try {
+        console.log('reset: clearing local attendance keys', attendanceKeys);
+        if (attendanceKeys.length > 0) {
+          await AsyncStorage.multiRemove(attendanceKeys);
+        }
+      } catch (err) {
+        console.error('reset: failed clearing local keys, attempting restore', err);
+        // try to restore backup
+        const restorePairs = Object.entries(backup).filter(([k, v]) => v !== null);
+        for (const [k, v] of restorePairs) {
+          await AsyncStorage.setItem(k, v as string);
+        }
+        toast.show('Reset failed: could not clear local storage. Local data restored.', 'error');
+        setIsResetting(false);
+        setLoading('reset_period', false);
+        return;
+      }
+
+      try {
+        // Clear in-memory state and rehydrate from active period (should be empty/new)
+        console.log('reset: clearing in-memory cache');
+        await attendance.clearLocalCache();
+
+        console.log('reset: fetching attendance for active period');
+        const periodData = await fetchAttendanceForActivePeriod(currentUser.uid);
+        // periodData: [{ id: date, meta, lectures: [...] }]
+        for (const d of periodData) {
+          const date = d.id;
+          const lecturesRaw = d.lectures || [];
+          // convert to aggregate per-subject entries
+          const bySubject: Record<string, { lectures: number; attended: number; subject?: string }> = {};
+          for (const e of lecturesRaw) {
+            const sid = e.subjectId || e.subject || 'unknown';
+            if (!bySubject[sid]) bySubject[sid] = { lectures: 0, attended: 0, subject: e.subject || sid };
+            if (e.lectureIndex !== undefined) {
+              bySubject[sid].lectures = Math.max(bySubject[sid].lectures, e.lectureIndex || 0);
+              if (e.attended) bySubject[sid].attended += 1;
+            } else {
+              bySubject[sid].lectures = Math.max(bySubject[sid].lectures, e.lectures || 0);
+              bySubject[sid].attended = (bySubject[sid].attended || 0) + (e.attended || 0);
+            }
+          }
+          const lectureEntries = Object.entries(bySubject).map(([subjectId, v]) => ({ subjectId, lectures: v.lectures, attended: v.attended }));
+          if (lectureEntries.length > 0) {
+            await attendance.saveDayAttendance(date, lectureEntries);
+          }
+        }
+
+        setActivePeriod(newPeriodId);
+        toast.show(`Attendance reset successfully for ${newPeriodId}`, 'success');
+        Alert.alert('Success', `Attendance reset for period ${newPeriodId}`);
+        setShowResetModal(false);
+      } catch (err) {
+        console.error('reset: error during rehydrate', err);
+        toast.show(`Reset failed: ${String(err)}`, 'error');
+        // Attempt to restore backup if possible
+        const restorePairs = Object.entries(backup).filter(([k, v]) => v !== null);
+        for (const [k, v] of restorePairs) {
+          await AsyncStorage.setItem(k, v as string);
+        }
+        setIsResetting(false);
+        setLoading('reset_period', false);
+        return;
+      }
+
+      setIsResetting(false);
+      setLoading('reset_period', false);
+    } catch (err) {
+      console.error('Error resetting attendance period:', err);
+      toast.show(`Reset failed: ${String(err)}`, 'error');
+      Alert.alert('Error', 'Failed to reset attendance');
+    } finally {
+      setLoading('reset_period', false);
     }
   };
 
   const handleRestoreFromDrive = async () => {
     try {
-      // Check if signed in to Google Drive
-      const isSignedIn = await backupService.isGoogleDriveSignedIn();
-      if (!isSignedIn) {
-        Alert.alert(
-          'Google Sign-In Required',
-          'You need to sign in with Google to restore from Drive. Would you like to sign in now?',
-          [
-            {
-              text: 'Cancel',
-              style: 'cancel',
-            },
-            {
-              text: 'Sign In',
-              onPress: async () => {
-                const signInSuccess = await backupService.signInToGoogleDrive();
-                if (signInSuccess) {
-                  // Now try restore again
-                  handleRestoreFromDrive();
-                } else {
-                  Alert.alert('Error', 'Failed to sign in to Google Drive');
-                }
-              },
-            },
-          ],
-        );
+      const currentUser = authService.getCurrentUser();
+      if (!currentUser) {
+        Alert.alert('Sign in required', 'Please sign in with Google to restore from cloud.');
         return;
       }
 
-      // Show confirmation dialog
       Alert.alert(
-        'Restore from Drive',
-        'This will overwrite your current data with the latest backup from Google Drive. Are you sure?',
+        'Restore from Cloud',
+        'This will attempt to restore attendance from your Firebase account. It will not overwrite local data unless you confirm. Continue?',
         [
-          {
-            text: 'Cancel',
-            style: 'cancel',
-          },
+          { text: 'Cancel', style: 'cancel' },
           {
             text: 'Restore',
             onPress: async () => {
-              console.log('Starting restore from Google Drive...');
-              // Perform restore
-              const result = await backupService.restoreFromGoogleDrive();
-              console.log('Restore result:', result);
+              try {
+                const docs = await listAllAttendanceDays(currentUser.uid);
+                if (!docs || docs.length === 0) {
+                  Alert.alert('No cloud backups', 'No attendance data found in your account');
+                  return;
+                }
 
-              if (result.success) {
-                Alert.alert(
-                  'Success',
-                  'Your data has been successfully restored from Google Drive!',
-                  [
-                    {
-                      text: 'OK',
-                      onPress: () => {
-                        // Optionally reload the app or update UI
-                      },
-                    },
-                  ],
-                );
-              } else {
-                Alert.alert('Restore Failed', result.error || 'Failed to restore data from Google Drive');
+                // Use AttendanceContext saveDayAttendance to write local copies
+                for (const doc of docs) {
+                  const date = doc.id;
+                  // Prefer `lectures` (new shape). Fallback to legacy `entries`.
+                  const lecturesRaw = Array.isArray(doc.lectures) ? doc.lectures : Array.isArray(doc.entries) ? doc.entries : [];
+                  if (!Array.isArray(lecturesRaw) || lecturesRaw.length === 0) continue;
+
+                  // Convert per-lecture docs or aggregates into aggregate LectureEntry[] expected by saveDayAttendance
+                  const bySubject: Record<string, { lectures: number; attended: number; subject?: string }> = {};
+                  for (const e of lecturesRaw) {
+                    const sid = e.subjectId || e.subject || 'unknown';
+                    if (!bySubject[sid]) bySubject[sid] = { lectures: 0, attended: 0, subject: e.subject || sid };
+                    // If this is per-lecture shape
+                    if (e.lectureIndex !== undefined) {
+                      bySubject[sid].lectures = Math.max(bySubject[sid].lectures, e.lectureIndex || 0);
+                      if (e.attended) bySubject[sid].attended += 1;
+                    } else {
+                      // legacy aggregate shape
+                      bySubject[sid].lectures = Math.max(bySubject[sid].lectures, e.lectures || 0);
+                      bySubject[sid].attended = (bySubject[sid].attended || 0) + (e.attended || 0);
+                    }
+                  }
+
+                  const lectureEntries = Object.entries(bySubject).map(([subjectId, v]) => ({ subjectId, lectures: v.lectures, attended: v.attended }));
+                  await attendance.saveDayAttendance(date, lectureEntries);
+                }
+
+                toast.show('Restored attendance from cloud', 'success');
+                Alert.alert('Success', 'Attendance restored from cloud');
+              } catch (err) {
+                console.error('Error restoring from Firestore:', err);
+                toast.show('Restore failed', 'error');
+                Alert.alert('Restore failed', 'Failed to restore attendance from cloud');
               }
-            },
-          },
-        ],
+            }
+          }
+        ]
       );
     } catch (error) {
-      console.error('Error restoring from Drive:', error);
+      console.error('Error restoring from Firestore:', error);
       Alert.alert('Error', 'An unexpected error occurred during restore');
     }
   };
@@ -282,39 +409,7 @@ export default function ProfileScreen() {
             )}
           </View>
 
-          {/* Target Attendance Card */}
-          <View style={[styles.targetContainer, {
-            backgroundColor: theme.colors.surface,
-            shadowColor: theme.colors.shadow
-          }]}>
-            <Text style={[styles.targetTitle, { color: theme.colors.text }]}>Target Attendance</Text>
-            <View style={styles.targetInputRow}>
-              <TextInput
-                style={[{
-                  backgroundColor: theme.colors.background,
-                  color: theme.colors.text,
-                  borderColor: theme.colors.border
-                }, styles.targetInput]}
-                keyboardType="numeric"
-                placeholder="75"
-                placeholderTextColor={theme.colors.textSecondary}
-                value={user?.targetPercentage?.toString() || '75'}
-                onChangeText={(value) => {
-                  // Allow backspace/delete
-                  if (value === '') {
-                    profileService.updateTargetPercentage(75);
-                    return;
-                  }
-                  const numericValue = value.replace(/[^0-9]/g, '');
-                  if (numericValue === '' || (parseInt(numericValue) >= 0 && parseInt(numericValue) <= 100)) {
-                    // Update target percentage
-                    profileService.updateTargetPercentage(parseInt(numericValue) || 75);
-                  }
-                }}
-              />
-              <Text style={[styles.percentSymbol, { color: theme.colors.textSecondary }]}>%</Text>
-            </View>
-          </View>
+          {/* Target Attendance Card removed per UX request */}
 
           {/* Actions */}
           <View style={styles.actionsContainer}>
@@ -328,21 +423,7 @@ export default function ProfileScreen() {
               </Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
-              style={[styles.actionButton, { backgroundColor: theme.colors.primary }]}
-              onPress={handleBackupToDrive}
-            >
-              <Ionicons name="cloud-upload" size={20} color={theme.colors.white} />
-              <Text style={[styles.actionButtonText, { color: theme.colors.white }]}>Backup to Drive</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.actionButton, { backgroundColor: theme.colors.success }]}
-              onPress={handleRestoreFromDrive}
-            >
-              <Ionicons name="cloud-download" size={20} color={theme.colors.white} />
-              <Text style={[styles.actionButtonText, { color: theme.colors.white }]}>Restore from Drive</Text>
-            </TouchableOpacity>
+            {/* Backup/Restore buttons removed from Profile per UX request */}
 
             <TouchableOpacity style={[styles.secondaryButton, {
               backgroundColor: theme.colors.surface,
@@ -351,6 +432,14 @@ export default function ProfileScreen() {
             }]}>
               <Ionicons name="key" size={20} color={theme.colors.textSecondary} />
               <Text style={[styles.actionButtonText, { color: theme.colors.textSecondary }]}>Change Password</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.actionButton, { backgroundColor: theme.colors.danger }]}
+              onPress={() => setShowResetModal(true)}
+            >
+              <Ionicons name="trash" size={20} color={theme.colors.white} />
+              <Text style={[styles.actionButtonText, { color: theme.colors.white }]}>Reset Attendance</Text>
             </TouchableOpacity>
           </View>
 
@@ -364,6 +453,38 @@ export default function ProfileScreen() {
         </View>
       </ScrollView>
       <LoadingIndicator />
+      <Modal
+        visible={showResetModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowResetModal(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' }}>
+          <View style={{ width: '90%', backgroundColor: theme.colors.surface, padding: 20, borderRadius: 12 }}>
+            <Text style={{ fontSize: 18, fontWeight: '600', marginBottom: 12, color: theme.colors.text }}>Confirm Reset Attendance</Text>
+            <Text style={{ color: theme.colors.textSecondary, marginBottom: 12 }}>Type YES RESET MY DATA to enable the confirm button.</Text>
+            <TextInput
+              value={resetConfirmText}
+              onChangeText={setResetConfirmText}
+              placeholder="Type YES RESET MY DATA"
+              placeholderTextColor={theme.colors.textSecondary}
+              style={{ borderWidth: 1, borderColor: theme.colors.border, padding: 12, borderRadius: 8, color: theme.colors.text, marginBottom: 12 }}
+            />
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 12 }}>
+              <TouchableOpacity onPress={() => { setShowResetModal(false); setResetConfirmText(''); }} style={{ padding: 10 }}>
+                <Text style={{ color: theme.colors.textSecondary }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                disabled={resetConfirmText !== 'YES RESET MY DATA'}
+                onPress={handleConfirmReset}
+                style={{ padding: 10, backgroundColor: resetConfirmText === 'YES RESET MY DATA' ? theme.colors.danger : theme.colors.surface, borderRadius: 8 }}
+              >
+                <Text style={{ color: resetConfirmText === 'YES RESET MY DATA' ? theme.colors.white : theme.colors.textSecondary }}>Confirm Reset</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
