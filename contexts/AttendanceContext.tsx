@@ -11,7 +11,6 @@ import {
   migrateLocalToCloud,
   listAllAttendanceDays,
 } from '@/services/firestore';
-import { saveDayAttendanceForPeriod, monthFromDate, migrateOldAttendanceToPeriods, getActivePeriodId } from '@/services/firestore';
 import useToast from '@/utils/useToast';
 
 const STORAGE_KEYS = {
@@ -28,7 +27,6 @@ const AttendanceProviderInner = () => {
   const [days, setDays] = useState<DayRecord[]>([]);
   const [targetPercentage, setTargetPercentage] = useState<number>(75);
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [activePeriodId, setActivePeriodId] = useState<string | null>(null);
 
   useEffect(() => {
     loadData();
@@ -53,22 +51,8 @@ const AttendanceProviderInner = () => {
   // Handle actions when a user logs in: hydrate app state from cloud
   const handleUserLogin = useCallback(async (uid: string) => {
     try {
-      // Migrate legacy attendance->periods if any (idempotent)
-      try {
-        await migrateOldAttendanceToPeriods(uid);
-      } catch (merr) {
-        console.warn('Legacy migration failed or skipped:', merr);
-      }
-
       // Hydrate app state from cloud: list all attendance days and reconstruct records/subjects
       const docs = await listAllAttendanceDays(uid);
-      // fetch active period id for this user (if any) and store in context
-      try {
-        const pid = await getActivePeriodId(uid);
-        setActivePeriodId(pid || null);
-      } catch (e) {
-        console.warn('Failed to fetch active period id:', e);
-      }
       const newRecords: AttendanceRecord[] = [];
       const subjectMap: Record<string, any> = {};
 
@@ -202,7 +186,6 @@ const AttendanceProviderInner = () => {
       setRecords([]);
       setDays([]);
       setTargetPercentage(75);
-      setActivePeriodId(null);
     }
   }, []);
 
@@ -234,27 +217,9 @@ const AttendanceProviderInner = () => {
 
       if (entries.length > 0) {
         try {
-          // convert aggregate entries to per-lecture entries and save under period determined by date
-          const lectures: any[] = [];
-          for (const e of entries) {
-            const subjectId = e.subjectId || e.subject;
-            for (let i = 1; i <= (e.lectures || 0); i++) {
-              lectures.push({
-                id: `${date}|${subjectId}|${i}`,
-                subject: e.subject,
-                subjectId,
-                lectureIndex: i,
-                attended: i <= (e.attended || 0),
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-              });
-            }
-          }
-
-          const periodId = monthFromDate(date);
-          await saveDayAttendanceForPeriod(uid, periodId, date, lectures as any);
+          await saveDayAttendanceToCloud(uid, date, entries as any);
           // show a small success toast
-          toast.show(`Synced ${date} to cloud (period ${periodId})`, 'success', 2000);
+          toast.show(`Synced ${date} to cloud`, 'success', 2000);
         } catch (err) {
           console.error('Error saving day to cloud:', err);
           toast.show('Failed to sync to cloud', 'error', 3000);
@@ -309,7 +274,7 @@ const AttendanceProviderInner = () => {
       } else {
         // Add new lecture
         const newRecord: AttendanceRecord = {
-          id: `${targetDate}-${subjectId}-${lectureIndex}`,
+          id: Date.now().toString(),
           subjectId,
           date: targetDate,
           lectureIndex,
@@ -323,7 +288,7 @@ const AttendanceProviderInner = () => {
       const maxIndex = subjectDateRecords.length > 0 ? Math.max(...subjectDateRecords.map(r => r.lectureIndex)) : 0;
       const newIndex = maxIndex + 1;
       const newRecord: AttendanceRecord = {
-        id: `${targetDate}-${subjectId}-${newIndex}`,
+        id: Date.now().toString(),
         subjectId,
         date: targetDate,
         lectureIndex: newIndex,
@@ -371,7 +336,7 @@ const AttendanceProviderInner = () => {
     // Add a first lecture for subjects that had no eligible records
     subjectsToAdd.forEach(subjectId => {
       const newRecord: AttendanceRecord = {
-        id: `${adjustedDate}-${subjectId}-1`,
+        id: Date.now().toString() + Math.random(),
         subjectId,
         date: adjustedDate,
         lectureIndex: 1,
@@ -419,20 +384,8 @@ const AttendanceProviderInner = () => {
   }, [days]);
 
   const getSubjectStats = useCallback((subjectId: string): AttendanceStats => {
-    // Filter records by active period if set to provide period-aware stats
-    const periodFilter = (r: AttendanceRecord) => {
-      if (!activePeriodId) return true;
-      try {
-        return monthFromDate(r.date) === activePeriodId;
-      } catch (e) {
-        return true;
-      }
-    };
-
     const subject = subjects.find(s => s.id === subjectId);
-    const subjectRecordsForPeriod = records.filter(r => r.subjectId === subjectId && periodFilter(r));
-
-    if ((!subject && subjectRecordsForPeriod.length === 0) || subjectRecordsForPeriod.length === 0) {
+    if (!subject || subject.totalClasses === 0) {
       return {
         percentage: 0,
         attended: 0,
@@ -442,21 +395,18 @@ const AttendanceProviderInner = () => {
         status: 'safe' as const,
       };
     }
-    // Compute totals from filtered records to reflect the selected period
-    const total = subjectRecordsForPeriod.filter(r => r.status !== 'no-lecture').length;
-    const attendedCount = subjectRecordsForPeriod.filter(r => r.status === 'present').length;
-    const subjectTarget = subject?.targetPercentage || targetPercentage;
 
-    const percentage = total === 0 ? 0 : (attendedCount / total) * 100;
-
+    const percentage = (subject.attendedClasses / subject.totalClasses) * 100;
+    const subjectTarget = subject.targetPercentage || targetPercentage;
+    
     const canMiss = Math.floor(
-      (attendedCount - (subjectTarget / 100) * total) /
-      (subjectTarget / 100 || 1)
+      (subject.attendedClasses - (subjectTarget / 100) * subject.totalClasses) /
+      (subjectTarget / 100)
     );
 
     const needToAttend = Math.ceil(
-      ((subjectTarget / 100) * total - attendedCount) /
-      (1 - subjectTarget / 100 || 1)
+      ((subjectTarget / 100) * subject.totalClasses - subject.attendedClasses) /
+      (1 - subjectTarget / 100)
     );
 
     let status: 'safe' | 'warning' | 'danger';
@@ -470,140 +420,16 @@ const AttendanceProviderInner = () => {
 
     return {
       percentage,
-      attended: attendedCount,
-      total,
+      attended: subject.attendedClasses,
+      total: subject.totalClasses,
       canMiss: Math.max(0, canMiss),
       needToAttend: Math.max(0, needToAttend),
       status,
     };
-  }, [subjects, targetPercentage, records, activePeriodId]);
-
-  // New refactored helpers: period-scoped stats for reuse
-  const getPeriodFilter = useCallback((periodId?: string) => {
-    return (r: AttendanceRecord) => {
-      if (!periodId) return true;
-      try {
-        return monthFromDate(r.date) === periodId;
-      } catch (e) {
-        return true;
-      }
-    };
-  }, []);
-
-  const getSubjectStatsForPeriod = useCallback((subjectId: string, periodId?: string): AttendanceStats => {
-    const periodFilter = getPeriodFilter(periodId);
-    const subject = subjects.find(s => s.id === subjectId);
-    const subjectRecordsForPeriod = records.filter(r => r.subjectId === subjectId && periodFilter(r));
-
-    if ((!subject && subjectRecordsForPeriod.length === 0) || subjectRecordsForPeriod.length === 0) {
-      return {
-        percentage: 0,
-        attended: 0,
-        total: 0,
-        canMiss: 0,
-        needToAttend: 0,
-        status: 'safe' as const,
-      };
-    }
-
-    const total = subjectRecordsForPeriod.filter(r => r.status !== 'no-lecture').length;
-    const attendedCount = subjectRecordsForPeriod.filter(r => r.status === 'present').length;
-    const subjectTarget = subject?.targetPercentage || targetPercentage;
-
-    const percentage = total === 0 ? 0 : (attendedCount / total) * 100;
-
-    const canMiss = Math.floor(
-      (attendedCount - (subjectTarget / 100) * total) /
-      (subjectTarget / 100 || 1)
-    );
-
-    const needToAttend = Math.ceil(
-      ((subjectTarget / 100) * total - attendedCount) /
-      (1 - subjectTarget / 100 || 1)
-    );
-
-    let status: 'safe' | 'warning' | 'danger';
-    if (percentage >= subjectTarget) {
-      status = 'safe' as const;
-    } else if (percentage >= subjectTarget - 5) {
-      status = 'warning' as const;
-    } else {
-      status = 'danger' as const;
-    }
-
-    return {
-      percentage,
-      attended: attendedCount,
-      total,
-      canMiss: Math.max(0, canMiss),
-      needToAttend: Math.max(0, needToAttend),
-      status,
-    };
-  }, [records, subjects, targetPercentage, getPeriodFilter]);
-
-  const getOverallStatsForPeriod = useCallback((periodId?: string): AttendanceStats => {
-    const periodFilter = getPeriodFilter(periodId);
-    const totalAttended = records.filter(periodFilter).reduce((sum, r) => r.status === 'present' ? sum + 1 : sum, 0);
-    const totalClasses = records.filter(periodFilter).reduce((sum, r) => r.status !== 'no-lecture' ? sum + 1 : sum, 0);
-
-    if (totalClasses === 0) {
-      return {
-        percentage: 0,
-        attended: 0,
-        total: 0,
-        canMiss: 0,
-        needToAttend: 0,
-        status: 'safe' as const,
-      };
-    }
-
-    const percentage = (totalAttended / totalClasses) * 100;
-
-    const canMiss = Math.floor(
-      (totalAttended - (targetPercentage / 100) * totalClasses) /
-      (targetPercentage / 100 || 1)
-    );
-
-    const needToAttend = Math.ceil(
-      ((targetPercentage / 100) * totalClasses - totalAttended) /
-      (1 - targetPercentage / 100 || 1)
-    );
-
-    let status: 'safe' | 'warning' | 'danger';
-    if (percentage >= targetPercentage) {
-      status = 'safe' as const;
-    } else if (percentage >= targetPercentage - 5) {
-      status = 'warning' as const;
-    } else {
-      status = 'danger' as const;
-    }
-
-    return {
-      percentage,
-      attended: totalAttended,
-      total: totalClasses,
-      canMiss: Math.max(0, canMiss),
-      needToAttend: Math.max(0, needToAttend),
-      status,
-    };
-  }, [records, targetPercentage, getPeriodFilter]);
+  }, [subjects, targetPercentage]);
 
   const getOverallStats = useCallback((): AttendanceStats => {
-    // Period-aware overall stats: if activePeriodId is set, filter records by that period
-    const periodFilter = (r: AttendanceRecord) => {
-      if (!activePeriodId) return true;
-      try {
-        return monthFromDate(r.date) === activePeriodId;
-      } catch (e) {
-        return true;
-      }
-    };
-
-    const filteredSubjects = subjects;
-    const totalAttended = records.filter(periodFilter).reduce((sum, r) => r.status === 'present' ? sum + 1 : sum, 0);
-    const totalClasses = records.filter(periodFilter).reduce((sum, r) => r.status !== 'no-lecture' ? sum + 1 : sum, 0);
-
-    if (filteredSubjects.length === 0 && totalClasses === 0) {
+    if (subjects.length === 0) {
       return {
         percentage: 0,
         attended: 0,
@@ -613,6 +439,10 @@ const AttendanceProviderInner = () => {
         status: 'safe' as const,
       };
     }
+
+    const totalAttended = subjects.reduce((sum, s) => sum + s.attendedClasses, 0);
+    const totalClasses = subjects.reduce((sum, s) => sum + s.totalClasses, 0);
+
     if (totalClasses === 0) {
       return {
         percentage: 0,
@@ -628,12 +458,12 @@ const AttendanceProviderInner = () => {
 
     const canMiss = Math.floor(
       (totalAttended - (targetPercentage / 100) * totalClasses) /
-      (targetPercentage / 100 || 1)
+      (targetPercentage / 100)
     );
 
     const needToAttend = Math.ceil(
       ((targetPercentage / 100) * totalClasses - totalAttended) /
-      (1 - targetPercentage / 100 || 1)
+      (1 - targetPercentage / 100)
     );
 
     let status: 'safe' | 'warning' | 'danger';
@@ -653,7 +483,7 @@ const AttendanceProviderInner = () => {
       needToAttend: Math.max(0, needToAttend),
       status,
     };
-  }, [subjects, targetPercentage, records, activePeriodId]);
+  }, [subjects, targetPercentage]);
 
   const updateTargetPercentage = useCallback(async (newTarget: number) => {
     try {
@@ -759,10 +589,6 @@ const AttendanceProviderInner = () => {
     days,
     targetPercentage,
     isLoading,
-  activePeriodId,
-  getPeriodFilter,
-  getSubjectStatsForPeriod,
-  getOverallStatsForPeriod,
     addSubject,
     updateSubject,
     deleteSubject,
@@ -777,8 +603,7 @@ const AttendanceProviderInner = () => {
     updateDayNotes,
     deleteLecture,
     saveDayAttendance,
-      clearLocalCache,
-  }), [subjects, records, days, targetPercentage, isLoading, activePeriodId, addSubject, updateSubject, deleteSubject, markAttendance, markAllAttendance, toggleHoliday, getSubjectStats, getOverallStats, updateTargetPercentage, isHoliday, getRecordsForDate, updateDayNotes, deleteLecture, saveDayAttendance]);
+  }), [subjects, records, days, targetPercentage, isLoading, addSubject, updateSubject, deleteSubject, markAttendance, markAllAttendance, toggleHoliday, getSubjectStats, getOverallStats, updateTargetPercentage, isHoliday, getRecordsForDate, updateDayNotes, deleteLecture, saveDayAttendance]);
 };
 
 export const [AttendanceProvider, useAttendance] = createContextHook(AttendanceProviderInner);
