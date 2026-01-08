@@ -33,6 +33,27 @@ export default function ProfileScreen() {
 
   useEffect(() => {
     const unsubscribe = profileService.subscribe(setUser);
+
+    // Ensure profile is initialized
+    const initProfile = async () => {
+      if (!profileService.getCurrentProfile()) {
+        try {
+          const currentUser = await authService.getCurrentUser();
+          if (currentUser) {
+            await profileService.initializeProfile(
+              currentUser.uid,
+              currentUser.email || '',
+              currentUser.displayName || 'User'
+            );
+          }
+        } catch (error) {
+          console.error('Error initializing profile in ProfileScreen:', error);
+        }
+      }
+    };
+
+    initProfile();
+
     return unsubscribe;
   }, []);
 
@@ -52,7 +73,23 @@ export default function ProfileScreen() {
   }, [isEditing, user]);
 
   const handleSave = useCallback(async () => {
-    if (!user) return;
+    console.log('handleSave called');
+    if (!user) {
+      console.error('User is null in handleSave');
+      Alert.alert('Error', 'User profile not loaded. Please try again.');
+      // Attempt to reload profile
+      const currentProfile = profileService.getCurrentProfile();
+      if (currentProfile) {
+        setUser(currentProfile);
+      }
+      return;
+    }
+
+    console.log('Saving profile with:', {
+      displayName: editName.trim(),
+      phone: editPhone.trim(),
+      college: editCollege.trim()
+    });
 
     const handler = createAsyncHandler(
       () => profileService.updateProfile({
@@ -64,8 +101,12 @@ export default function ProfileScreen() {
       {
         loadingKey: 'profile_update',
         onSuccess: () => {
+          console.log('Profile update successful');
           setIsEditing(false);
           Alert.alert('Success', 'Profile updated successfully');
+        },
+        onError: (error) => {
+          console.error('Profile update failed:', error);
         }
       }
     );
@@ -282,39 +323,7 @@ export default function ProfileScreen() {
             )}
           </View>
 
-          {/* Target Attendance Card */}
-          <View style={[styles.targetContainer, {
-            backgroundColor: theme.colors.surface,
-            shadowColor: theme.colors.shadow
-          }]}>
-            <Text style={[styles.targetTitle, { color: theme.colors.text }]}>Target Attendance</Text>
-            <View style={styles.targetInputRow}>
-              <TextInput
-                style={[{
-                  backgroundColor: theme.colors.background,
-                  color: theme.colors.text,
-                  borderColor: theme.colors.border
-                }, styles.targetInput]}
-                keyboardType="numeric"
-                placeholder="75"
-                placeholderTextColor={theme.colors.textSecondary}
-                value={user?.targetPercentage?.toString() || '75'}
-                onChangeText={(value) => {
-                  // Allow backspace/delete
-                  if (value === '') {
-                    profileService.updateTargetPercentage(75);
-                    return;
-                  }
-                  const numericValue = value.replace(/[^0-9]/g, '');
-                  if (numericValue === '' || (parseInt(numericValue) >= 0 && parseInt(numericValue) <= 100)) {
-                    // Update target percentage
-                    profileService.updateTargetPercentage(parseInt(numericValue) || 75);
-                  }
-                }}
-              />
-              <Text style={[styles.percentSymbol, { color: theme.colors.textSecondary }]}>%</Text>
-            </View>
-          </View>
+
 
           {/* Actions */}
           <View style={styles.actionsContainer}>
@@ -550,39 +559,5 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  targetContainer: {
-    backgroundColor: '#FFF',
-    borderRadius: 16,
-    padding: 20,
-    alignItems: 'center',
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  targetTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1A1A1A',
-    marginBottom: 12,
-  },
-  targetInputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  targetInput: {
-    borderWidth: 1,
-    borderRadius: 12,
-    padding: 12,
-    fontSize: 16,
-    minWidth: 60,
-    textAlign: 'center',
-  },
-  percentSymbol: {
-    fontSize: 18,
-    fontWeight: '600',
-  },
+
 });

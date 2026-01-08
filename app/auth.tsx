@@ -19,6 +19,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { themeService, type Theme } from '@/services/theme';
 import { authService } from '@/services/auth';
+import { profileService } from '@/services/profile';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { migrateLocalToCloud } from '@/services/firestore';
 import { AnimationService } from '@/services/animations';
@@ -34,7 +35,7 @@ export default function AuthScreen() {
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  
+
   // Animation values
   const fadeAnim = new Animated.Value(0);
   const slideAnim = new Animated.Value(50);
@@ -42,32 +43,6 @@ export default function AuthScreen() {
 
   useEffect(() => {
     const unsubscribe = themeService.subscribe(setTheme);
-
-    // TEMPORARILY DISABLED: Auth check that redirects logged-in users
-    // This was causing blank screen because authenticated users
-    // were immediately redirected away from auth screen during testing
-
-    /* Uncomment this code for production to prevent authenticated users from accessing login screen:
-    // Check if user is already authenticated
-    const checkAuth = () => {
-      const user = authService.getCurrentUser();
-      if (user) {
-        // User is already authenticated, redirect to main app
-        router.replace('/tabs');
-        return;
-      }
-    };
-
-    // Listen for auth state changes
-    const unsubscribeAuth = authService.onAuthStateChanged((user) => {
-      if (user) {
-        // User signed in, redirect to main app
-        router.replace('/tabs');
-      }
-    });
-
-    checkAuth();
-    */
 
     // Animate on mount
     Animated.parallel([
@@ -109,12 +84,22 @@ export default function AuthScreen() {
     console.log('Starting email auth...');
 
     try {
+      let user;
       if (isLogin) {
         console.log('Signing in with email...');
-        await authService.signInWithEmail(email.trim(), password);
+        user = await authService.signInWithEmail(email.trim(), password);
       } else {
         console.log('Creating account with email...');
-        await authService.createAccountWithEmail(email.trim(), password, displayName.trim());
+        user = await authService.createAccountWithEmail(email.trim(), password, displayName.trim());
+      }
+
+      if (user) {
+        // Initialize profile immediately
+        await profileService.initializeProfile(
+          user.uid,
+          user.email || '',
+          user.displayName || 'User'
+        );
       }
 
       console.log('Auth successful! Preparing to navigate...');
@@ -127,6 +112,7 @@ export default function AuthScreen() {
 
     } catch (error: any) {
       console.error('Authentication error:', error);
+      Alert.alert('Authentication Error', error.message || 'Failed to authenticate');
     } finally {
       setIsLoading(false);
     }
@@ -139,12 +125,20 @@ export default function AuthScreen() {
 
     try {
       console.log('Calling authService.signInWithGoogle()...');
-      await authService.signInWithGoogle();
-      console.log('Google sign-in returned');
+      const user = await authService.signInWithGoogle();
+      console.log('Google sign-in returned', user?.email);
+
+      if (user) {
+        // Initialize profile immediately
+        await profileService.initializeProfile(
+          user.uid,
+          user.email || '',
+          user.displayName || 'User'
+        );
+      }
 
       // If local data exists, ask the user whether to upload and whether to clear local copy
       try {
-        const user = authService.getCurrentUser();
         const uid = user?.uid;
         if (uid) {
           const [subjectsData, recordsData, daysData] = await Promise.all([
@@ -230,11 +224,11 @@ export default function AuthScreen() {
   };
 
   return (
-    <KeyboardAvoidingView 
+    <KeyboardAvoidingView
       style={[styles.container, { backgroundColor: theme.colors.background }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      <ScrollView 
+      <ScrollView
         contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top }]}
         showsVerticalScrollIndicator={false}
       >
@@ -337,7 +331,7 @@ export default function AuthScreen() {
             <Text style={[styles.footerText, { color: theme.colors.textSecondary }]}>
               {isLogin ? "Don't have an account? " : "Already have an account? "}
             </Text>
-            <TouchableOpacity 
+            <TouchableOpacity
               onPress={() => {
                 setIsLogin(!isLogin);
                 if (Platform.OS !== 'web') {
@@ -345,7 +339,7 @@ export default function AuthScreen() {
                 }
               }}
             >
-            <Text style={[styles.footerLink, { color: theme.colors.primary }]}>
+              <Text style={[styles.footerLink, { color: theme.colors.primary }]}>
                 {isLogin ? 'Sign Up' : 'Sign In'}
               </Text>
             </TouchableOpacity>

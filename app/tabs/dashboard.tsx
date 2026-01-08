@@ -24,12 +24,13 @@ import { useRouter } from 'expo-router';
 import CalendarAttendance from '@/components/CalendarAttendance';
 import MarkPastAttendanceModal from '@/components/MarkPastAttendanceModal';
 import { format as formatDateFn } from 'date-fns';
+import type { UserProfile } from '@/types/User';
 
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
   const { theme } = useTheme();
   const router = useRouter();
-  const [profile, setProfile] = useState(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
   const [showQuickMarkModal, setShowQuickMarkModal] = useState(false);
   const [showSubjectMarkModal, setShowSubjectMarkModal] = useState(false);
   const [selectedSubject, setSelectedSubject] = useState<string | null>(null);
@@ -45,7 +46,7 @@ export default function DashboardScreen() {
   // Always use current date for quick attendance marking
   const currentDate = formatDateFn(new Date(), 'yyyy-MM-dd');
 
-  
+
 
   const { subjects, records, getOverallStats, markAllAttendance, toggleHoliday, updateDayNotes, markAttendance, deleteLecture } = useAttendance();
 
@@ -102,25 +103,37 @@ export default function DashboardScreen() {
   }, [router]);
 
   useEffect(() => {
+    // Subscribe to profile changes
+    const unsubscribe = profileService.subscribe((updatedProfile) => {
+      if (updatedProfile) {
+        setProfile(updatedProfile);
+        setUserName(updatedProfile.displayName || 'Student');
+      }
+    });
+
     // Initialize profile if user is authenticated
     const initializeUser = async () => {
-      const currentUser = await authService.getCurrentUser();
-      if (currentUser && !profile) {
-        profileService.initializeProfile(
-          currentUser.uid,
-          currentUser.email || '',
-          currentUser.displayName || 'User'
-        );
-      }
-
-      // Get current profile data to get user name
-      const currentProfile = profileService.getCurrentProfile();
-      if (currentProfile) {
-        setUserName(currentProfile.displayName || 'Student');
+      try {
+        const currentUser = await authService.getCurrentUser();
+        if (currentUser) {
+          // Check if profile is already initialized in service
+          const currentProfile = profileService.getCurrentProfile();
+          if (!currentProfile) {
+            await profileService.initializeProfile(
+              currentUser.uid,
+              currentUser.email || '',
+              currentUser.displayName || 'User'
+            );
+          }
+        }
+      } catch (error) {
+        console.error('Error initializing user profile in dashboard:', error);
       }
     };
 
     initializeUser();
+
+    return () => unsubscribe();
   }, []);
 
   const handleQuickMarkAttendance = async (attended: boolean, date?: string) => {
@@ -259,23 +272,23 @@ export default function DashboardScreen() {
             </View>
             <View style={styles.headerRight}>
               <TouchableOpacity
-                  style={[styles.calendarButton, {
-                    backgroundColor: theme.colors.primary,
-                    shadowColor: theme.colors.shadow,
-                    shadowOffset: { width: 0, height: 2 },
-                    shadowOpacity: 0.1,
-                    shadowRadius: 4,
-                    elevation: 3,
-                  }]}
-                  onPress={() => {
-                    setShowCalendar(true);
-                    if (Platform.OS !== 'web') {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    }
-                  }}
-                >
-                  <Ionicons name="calendar-outline" size={20} color={theme.colors.white} />
-                </TouchableOpacity>
+                style={[styles.calendarButton, {
+                  backgroundColor: theme.colors.primary,
+                  shadowColor: theme.colors.shadow,
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.1,
+                  shadowRadius: 4,
+                  elevation: 3,
+                }]}
+                onPress={() => {
+                  setShowCalendar(true);
+                  if (Platform.OS !== 'web') {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  }
+                }}
+              >
+                <Ionicons name="calendar-outline" size={20} color={theme.colors.white} />
+              </TouchableOpacity>
             </View>
           </View>
 
@@ -370,7 +383,7 @@ export default function DashboardScreen() {
               {subjects.map((subject) => {
                 const subjectPercentage = subject.totalClasses > 0 ? (subject.attendedClasses / subject.totalClasses) * 100 : 0;
                 const subjectStatus = subjectPercentage >= subject.targetPercentage ? 'safe' :
-                                    subjectPercentage >= subject.targetPercentage - 5 ? 'warning' : 'danger';
+                  subjectPercentage >= subject.targetPercentage - 5 ? 'warning' : 'danger';
 
                 return (
                   <TouchableOpacity key={subject.id} style={[styles.subjectCard, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]} onPress={() => openSubjectMarkModal(subject.id)}>

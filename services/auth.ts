@@ -12,6 +12,7 @@ import {
 } from 'firebase/auth';
 import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
 import { auth, googleProvider } from './firebase';
+import { Platform } from 'react-native';
 
 export interface AuthUser {
   uid: string;
@@ -46,12 +47,12 @@ class AuthService {
     try {
       const activeAuth = this.getAuthOrThrow();
       const userCredential = await createUserWithEmailAndPassword(activeAuth, email, password);
-      
+
       // Update display name if provided
       if (displayName && userCredential.user) {
         await updateProfile(userCredential.user, { displayName });
       }
-      
+
       return this.mapFirebaseUser(userCredential.user);
     } catch (error: any) {
       console.error('Error creating account:', error);
@@ -63,9 +64,13 @@ class AuthService {
   async signInWithGoogle(): Promise<AuthUser> {
     try {
       // If running in a browser (web), use Firebase's popup OAuth flow
-      if (typeof window !== 'undefined' && googleProvider && auth) {
-        const userCredential = await signInWithPopup(auth, googleProvider);
-        return this.mapFirebaseUser(userCredential.user);
+      if (Platform.OS === 'web') {
+        const { googleProvider, auth } = require('./firebase');
+        if (googleProvider && auth) {
+          const userCredential = await signInWithPopup(auth, googleProvider);
+          return this.mapFirebaseUser(userCredential.user);
+        }
+        throw new Error('Firebase web auth not initialized');
       }
 
       // Ensure Google Play Services are available (and prompt to update if needed)
@@ -73,7 +78,9 @@ class AuthService {
 
       // Sign in with Google (native)
       const signInResult = await GoogleSignin.signIn();
-      const idToken = (signInResult as any)?.idToken;
+      // Handle response structure for @react-native-google-signin/google-signin v16+ (returns object with data property)
+      // and fallback for older versions
+      const idToken = signInResult.data?.idToken || (signInResult as any).idToken;
 
       if (!idToken) {
         throw new Error('Missing Google ID token');
@@ -83,8 +90,8 @@ class AuthService {
       const googleCredential = GoogleAuthProvider.credential(idToken);
 
       // Sign in to Firebase with the credential
-  const activeAuth = this.getAuthOrThrow();
-  const userCredential = await signInWithCredential(activeAuth, googleCredential);
+      const activeAuth = this.getAuthOrThrow();
+      const userCredential = await signInWithCredential(activeAuth, googleCredential);
 
       return this.mapFirebaseUser(userCredential.user);
     } catch (error: any) {

@@ -19,11 +19,13 @@ export let auth: Auth | null = null;
 export let db: Firestore | null = null;
 export let googleProvider: GoogleAuthProvider | null = null;
 
-// Initialize Firebase only in a browser environment (or non-SSR environment)
+// Initialize Firebase
+app = initializeApp(firebaseConfig);
+auth = getAuth(app);
+db = getFirestore(app);
+
+// Initialize specific text for web environment
 if (typeof window !== 'undefined') {
-  app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
-  db = getFirestore(app);
   googleProvider = new GoogleAuthProvider();
   googleProvider.addScope('email');
   googleProvider.addScope('profile');
